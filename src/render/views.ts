@@ -11,6 +11,11 @@ import {
   type LiveCartPoleEpisode,
 } from "../environments/cartpole.js";
 import type { TspEnvironment } from "../environments/tsp.js";
+import {
+  PREDATOR_PREY_ARENA_SIZE,
+  PREDATOR_PREY_CAPTURE_RADIUS,
+  type PredatorPreySnapshot,
+} from "../environments/predatorPrey.js";
 
 /**
  * Renders one environment's best genome to a canvas. `onGeneration` is called
@@ -192,6 +197,140 @@ export class CartPoleView implements EnvironmentView {
     ctx.stroke();
     ctx.lineWidth = 1;
   }
+}
+
+/**
+ * Predator–prey: the live arms race on the left (a fox chasing a rabbit) and a
+ * CIAO plot on the right — the current champion predator scored against every
+ * ancestral prey champion. A smooth colour gradient down the CIAO plot means
+ * genuine progress; horizontal banding means the arms race is cycling
+ * (RESEARCH.md §4.5). This view is driven directly, not through `EnvironmentView`,
+ * because co-evolution has two populations rather than one.
+ */
+export class PredatorPreyView {
+  private readonly arena: number;
+  private readonly arenaX = 12;
+  private readonly arenaY = 12;
+  private readonly ciaoX: number;
+
+  constructor(
+    private readonly ctx: CanvasRenderingContext2D,
+    private readonly width: number,
+    private readonly height: number,
+  ) {
+    this.arena = height - this.arenaY * 2;
+    this.ciaoX = this.arenaX + this.arena + 24;
+  }
+
+  /** Empty arena shown before the first generation has produced a champion. */
+  drawIdle(): void {
+    this.clear();
+    this.drawArenaFrame();
+    this.ctx.fillStyle = COLORS.muted;
+    this.ctx.font = "13px ui-monospace, monospace";
+    this.ctx.fillText("seeding the arms race…", this.arenaX + 12, this.arenaY + 24);
+  }
+
+  /** Draws one animation frame: the live chase plus the accumulated CIAO plot. */
+  draw(snapshot: PredatorPreySnapshot, ciao: readonly (readonly number[])[]): void {
+    this.clear();
+    this.drawArenaFrame();
+
+    const captureRadiusPx = (PREDATOR_PREY_CAPTURE_RADIUS / PREDATOR_PREY_ARENA_SIZE) * this.arena;
+    this.drawAgent(snapshot.predator, "#f97316", captureRadiusPx); // fox
+    this.drawAgent(snapshot.prey, "#38bdf8", 0); // rabbit
+
+    if (snapshot.captured) {
+      this.ctx.fillStyle = "#f97316";
+      this.ctx.font = "bold 15px ui-monospace, monospace";
+      this.ctx.fillText("caught!", this.arenaX + 12, this.arenaY + this.arena - 14);
+    }
+
+    this.drawCiao(ciao);
+  }
+
+  private drawAgent(agent: { readonly x: number; readonly y: number; readonly heading: number }, color: string, ringPx: number): void {
+    const { ctx } = this;
+    const px = this.arenaX + (agent.x / PREDATOR_PREY_ARENA_SIZE) * this.arena;
+    const py = this.arenaY + (agent.y / PREDATOR_PREY_ARENA_SIZE) * this.arena;
+
+    if (ringPx > 0) {
+      ctx.strokeStyle = "rgba(249, 115, 22, 0.35)";
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.arc(px, py, ringPx, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    ctx.arc(px, py, 6, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Heading whisker.
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(px, py);
+    ctx.lineTo(px + Math.cos(agent.heading) * 12, py + Math.sin(agent.heading) * 12);
+    ctx.stroke();
+  }
+
+  /** Renders the CIAO matrix as a heat map, most recent generations at the bottom. */
+  private drawCiao(ciao: readonly (readonly number[])[]): void {
+    const { ctx } = this;
+    const plotWidth = this.width - this.ciaoX - 12;
+    const plotHeight = this.arena;
+
+    ctx.fillStyle = COLORS.muted;
+    ctx.font = "11px ui-monospace, monospace";
+    ctx.fillText("CIAO — champion vs ancestors", this.ciaoX, this.arenaY - 2);
+
+    if (ciao.length === 0) {
+      return;
+    }
+    // Show the most recent generations; the newest row spans the most columns.
+    const maxCells = 60;
+    const rows = ciao.slice(-maxCells);
+    const columns = Math.min(maxCells, (rows[rows.length - 1] as readonly number[]).length);
+    const cellW = plotWidth / columns;
+    const cellH = plotHeight / rows.length;
+
+    for (let r = 0; r < rows.length; r++) {
+      const row = rows[r] as readonly number[];
+      const shown = row.slice(-columns);
+      for (let c = 0; c < shown.length; c++) {
+        ctx.fillStyle = heat(shown[c] as number);
+        ctx.fillRect(this.ciaoX + c * cellW, this.arenaY + r * cellH, cellW + 0.5, cellH + 0.5);
+      }
+    }
+    ctx.strokeStyle = COLORS.grid;
+    ctx.lineWidth = 1;
+    ctx.strokeRect(this.ciaoX, this.arenaY, plotWidth, plotHeight);
+  }
+
+  private drawArenaFrame(): void {
+    const { ctx } = this;
+    ctx.fillStyle = COLORS.panel;
+    ctx.fillRect(this.arenaX, this.arenaY, this.arena, this.arena);
+    ctx.strokeStyle = COLORS.grid;
+    ctx.lineWidth = 1;
+    ctx.strokeRect(this.arenaX, this.arenaY, this.arena, this.arena);
+  }
+
+  private clear(): void {
+    this.ctx.fillStyle = COLORS.background;
+    this.ctx.fillRect(0, 0, this.width, this.height);
+  }
+}
+
+/** Maps a predator payoff in [0, 1] to a blue→yellow→red heat colour. */
+function heat(value: number): string {
+  const t = Math.min(1, Math.max(0, value));
+  const r = Math.round(255 * Math.min(1, t * 2));
+  const g = Math.round(255 * (1 - Math.abs(t - 0.5) * 2));
+  const b = Math.round(255 * Math.min(1, (1 - t) * 2));
+  return `rgb(${r}, ${g}, ${b})`;
 }
 
 /** Precomputes the Rastrigin surface as a heat map into an offscreen canvas. */
