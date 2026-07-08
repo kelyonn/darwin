@@ -50,6 +50,46 @@ export function drawFitnessChart(
   ctx.fillText(`best ${max.toFixed(2)}`, padding, padding + 10);
 }
 
+/**
+ * Capture-rate pulse for co-evolution (RESEARCH.md §4.5). Because coevolutionary
+ * fitness is relative and not comparable across generations, the fraction of
+ * contests the predators win is the honest arms-race signal. Fixed 0–1 scale so
+ * the swings are legible.
+ */
+export function drawCaptureRateChart(
+  ctx: CanvasRenderingContext2D,
+  history: readonly number[],
+  width: number,
+  height: number,
+): void {
+  ctx.fillStyle = COLORS.panel;
+  ctx.fillRect(0, 0, width, height);
+
+  const padding = 8;
+  const plotWidth = width - padding * 2;
+  const plotHeight = height - padding * 2;
+  const toY = (value: number): number => padding + (1 - value) * plotHeight;
+
+  // A balanced arms race hovers near 50%: draw that reference line.
+  ctx.strokeStyle = COLORS.grid;
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(padding, toY(0.5));
+  ctx.lineTo(width - padding, toY(0.5));
+  ctx.stroke();
+
+  if (history.length >= 2) {
+    const toX = (index: number): number => padding + (index / (history.length - 1)) * plotWidth;
+    drawSeries(ctx, history, toX, toY, COLORS.accent);
+  }
+
+  ctx.fillStyle = COLORS.muted;
+  ctx.font = "11px ui-monospace, monospace";
+  const latest = history[history.length - 1];
+  const label = latest === undefined ? "capture rate" : `capture rate ${(latest * 100).toFixed(0)}%`;
+  ctx.fillText(label, padding, padding + 10);
+}
+
 function drawSeries(
   ctx: CanvasRenderingContext2D,
   values: readonly number[],
