@@ -6,13 +6,19 @@ import type { CompetitionOutcome } from "../search/coevolution.js";
 /** Unit-square arena; positions are clamped to `[0, ARENA_SIZE]`. */
 const ARENA_SIZE = 1;
 const ARENA_DIAGONAL = Math.SQRT2;
-/** Per-tick travel distance at full throttle. The predator is slightly faster. */
-const PREDATOR_SPEED = 0.025;
-const PREY_SPEED = 0.02;
-/** Maximum heading change per tick, in radians. */
-const MAX_TURN = 0.35;
+/**
+ * Per-tick travel distance at full throttle. The prey is slightly faster — the
+ * life–dinner principle (Dawkins & Krebs, 1979): the rabbit runs for its life,
+ * the fox only for its dinner. This keeps the arms race engaged instead of
+ * letting a faster pursuer trivially dominate (which collapses the prey gradient).
+ */
+const PREDATOR_SPEED = 0.022;
+const PREY_SPEED = 0.024;
+/** Maximum heading change per tick, in radians. The prey is more manoeuvrable. */
+const PREDATOR_MAX_TURN = 0.3;
+const PREY_MAX_TURN = 0.4;
 /** Contact distance at which the predator captures the prey. */
-const CAPTURE_RADIUS = 0.05;
+const CAPTURE_RADIUS = 0.04;
 /** Contest length in ticks. */
 const EPISODE_STEPS = 200;
 
@@ -115,8 +121,8 @@ export class PredatorPreyEnvironment {
         if (captured) {
           return false;
         }
-        act(predator, predatorAgent, preyAgent, PREDATOR_SPEED);
-        act(prey, preyAgent, predatorAgent, PREY_SPEED);
+        act(predator, predatorAgent, preyAgent, PREDATOR_SPEED, PREDATOR_MAX_TURN);
+        act(prey, preyAgent, predatorAgent, PREY_SPEED, PREY_MAX_TURN);
         captured = distance(predatorAgent, preyAgent) < CAPTURE_RADIUS;
         return !captured;
       },
@@ -131,8 +137,8 @@ function simulate(predator: Network, prey: Network): CompetitionOutcome {
   let closest = distance(predatorAgent, preyAgent);
 
   for (let step = 0; step < EPISODE_STEPS; step++) {
-    act(predator, predatorAgent, preyAgent, PREDATOR_SPEED);
-    act(prey, preyAgent, predatorAgent, PREY_SPEED);
+    act(predator, predatorAgent, preyAgent, PREDATOR_SPEED, PREDATOR_MAX_TURN);
+    act(prey, preyAgent, predatorAgent, PREY_SPEED, PREY_MAX_TURN);
     const separation = distance(predatorAgent, preyAgent);
     closest = Math.min(closest, separation);
     if (separation < CAPTURE_RADIUS) {
@@ -151,10 +157,10 @@ function simulate(predator: Network, prey: Network): CompetitionOutcome {
  * Advances one agent: it observes its opponent, the network chooses a turn and
  * throttle, and the body moves within the arena.
  */
-function act(network: Network, self: Agent, opponent: Agent, maxSpeed: number): void {
+function act(network: Network, self: Agent, opponent: Agent, maxSpeed: number, maxTurn: number): void {
   const output = network.feedForward(observe(self, opponent));
   // Read both outputs immediately: the buffer is reused on the next call.
-  const turn = clampUnit(output[0] as number) * MAX_TURN;
+  const turn = clampUnit(output[0] as number) * maxTurn;
   const throttle = 0.5 * (clampUnit(output[1] as number) + 1);
 
   self.heading = normalizeAngle(self.heading + turn);
