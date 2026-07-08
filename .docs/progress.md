@@ -14,7 +14,7 @@ something running.
 | M7 | Observability: canvas views per env, selector, fitness chart, `Runner` | ✅ done | all 4 environments render; verified on screen |
 | M6 | Track runner (raycast sensors; held-out tracks) | ⬜ | die on wall; progress-led fitness `checkpoints·K + distance` |
 | M8 | Performance pass (typed-array reuse, worker, `kernel/cpu.ts`) | ◐ partial | Float32Array weights already in `network.ts`/`matrix.ts`; buffer pooling + worker + measured 60 FPS numbers remain |
-| M9 | Predator–prey + `search/coevolution.ts` (Hall of Fame, sampling, sharing) | ✅ done | `CoevolutionDriver` + `predatorPrey.ts`; 11 tests: pure fitness-sharing math, driver reproducibility, complementary contest scoring. CIAO plot + browser render wiring deferred |
+| M9 | Predator–prey + `search/coevolution.ts` (Hall of Fame, sampling, sharing) + CIAO plot + browser view | ✅ done | `CoevolutionDriver` + `predatorPrey.ts`; 11 tests. Wired as the default landing view via a `Simulation` adapter in `main.ts`; live arena + CIAO heatmap + capture-rate pulse. Verified on screen: capture rate oscillates ~25–45% (engaged arms race) |
 | M10 | Maze + `search/novelty.ts`; Gait + `search/mapElites.ts` | ⬜ | proves the selection-pressure axis |
 | M11 | `headless/runExperiment.ts` — batch runner | ⬜ | research substrate (RESEARCH.md §7) |
 | M12 | Scale: `kernel/gpu.ts` (WebGPU) + `kernel/wasm.ts`; three-backend benchmark | ⬜ | large, separate effort; measure — never fabricate (PRD §8) |
@@ -22,19 +22,19 @@ something running.
 Test status: **61 passing** across 11 files. Typecheck clean under full strict mode. Suite runs in ~6s.
 
 ## Current focus
-M9 (predator–prey co-evolution) is complete: a distinct `CoevolutionDriver` under
-`src/search/` drives two populations with shared-sampling opponents, a Hall of Fame, and
-competitive fitness sharing (Rosin & Belew), plus a graded closeness payoff that keeps a
-gradient before the first capture (defends against disengagement). It shares `core/breeding.ts`
-with the GA but not the `SearchStrategy` contract.
+M9 (predator–prey co-evolution) is **complete and demoable**. A distinct `CoevolutionDriver`
+drives two populations with shared-sampling opponents, a Hall of Fame, and competitive fitness
+sharing (Rosin & Belew), plus a graded closeness payoff that keeps a gradient before the first
+capture (defends against disengagement). It shares `core/breeding.ts` with the GA but not the
+`SearchStrategy` contract. It is the default landing view (PRD §14): live arena + CIAO heatmap
+(RESEARCH.md §4.5) + capture-rate pulse, wired through a `Simulation` adapter in `main.ts` so the
+render loop is oblivious to which driver runs.
 
-Two M9 follow-ups remain before it is demo-complete:
-1. **Browser wiring** — `predatorPrey.ts` exposes `createEpisode()` but is not yet wired into
-   `main.ts`/`views.ts` as a selectable landing view (kept separate to protect the green demo).
-2. **CIAO plot** — the champion archives exist in the driver; the plot itself (RESEARCH.md §4.5)
-   is unbuilt.
+Balance tuned to the life–dinner principle (prey slightly faster and more manoeuvrable) so the
+race stays engaged (~25–45% capture) instead of the predators trivially dominating and collapsing
+the prey gradient.
 
 ## Next
 M10 — Maze + `search/novelty.ts` and Gait + `search/mapElites.ts`, proving the
-selection-pressure axis end to end. Or close out the two M9 follow-ups first for a
-demoable arms race.
+selection-pressure axis end to end. Alternatively: host the static bundle (highest real-world
+value), or add a dominance-tournament / frozen-benchmark progress metric alongside the CIAO plot.
