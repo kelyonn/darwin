@@ -1,18 +1,10 @@
 import type { Genome } from "./genome.js";
 import type { Rng } from "./rng.js";
 import type { SearchStrategy } from "./search.js";
+import { reproduce, type BreedingConfig } from "./breeding.js";
 
 /** Tuning parameters for {@link GenerationalGA}. */
-export interface GaConfig {
-  /** Number of genomes per generation. Must be positive. */
-  readonly populationSize: number;
-  /** Best genomes cloned unchanged into the next generation (PRD §7). */
-  readonly eliteCount: number;
-  /** Candidates drawn per tournament; the fittest wins a breeding slot. */
-  readonly tournamentSize: number;
-  /** Per-locus mutation rate passed to {@link Genome.mutate}. */
-  readonly mutationRate: number;
-}
+export type GaConfig = BreedingConfig;
 
 /**
  * The generational genetic algorithm (PRD §7): evaluate, sort, select, breed,
@@ -49,30 +41,6 @@ export class GenerationalGA implements SearchStrategy {
     // preserve prior order — a prerequisite for reproducibility.
     const ranked = [...population].sort((a, b) => b.fitness - a.fitness);
 
-    const next: Genome[] = [];
-    for (let i = 0; i < this.config.eliteCount; i++) {
-      // Safe: eliteCount <= populationSize === ranked.length.
-      next.push((ranked[i] as Genome).clone());
-    }
-
-    while (next.length < this.config.populationSize) {
-      const parentA = this.selectParent(ranked);
-      const parentB = this.selectParent(ranked);
-      next.push(parentA.crossover(parentB).mutate(this.config.mutationRate));
-    }
-
-    return next;
-  }
-
-  /** Tournament selection: sample `tournamentSize` genomes, return the fittest. */
-  private selectParent(ranked: readonly Genome[]): Genome {
-    let winner = this.rng.pick(ranked);
-    for (let i = 1; i < this.config.tournamentSize; i++) {
-      const challenger = this.rng.pick(ranked);
-      if (challenger.fitness > winner.fitness) {
-        winner = challenger;
-      }
-    }
-    return winner;
+    return reproduce(ranked, this.config, this.rng);
   }
 }
