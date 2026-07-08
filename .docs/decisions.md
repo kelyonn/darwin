@@ -35,3 +35,32 @@ that want stats/best for the generation just evaluated must read them from the
 children showed avg ≈ 0). The render loop now keeps the incoming reference. When
 the dashboard lands (M8), formalise this as a `Runner` yielding
 `{ generation, evaluatedPopulation, stats }` so no caller re-trips it.
+
+## ADR-004 — Co-evolution is a distinct driver, not a `SearchStrategy`
+**Context.** `SearchStrategy.step(population, evaluate)` models one population
+whose members have an absolute fitness. Competitive co-evolution (PRD §10 Tier 3)
+has two populations whose fitness is *relative* to a co-evolving opponent (the
+Red Queen — RESEARCH.md §2.1); a single-population `step` cannot express it. The
+specs (CLAUDE.md milestone note, RESEARCH.md §4, PRD §11) flag this explicitly.
+**Decision.** `src/search/coevolution.ts` defines a separate `CoevolutionDriver`
+with its own `step(state) → { next, stats }` over `{ predators, prey }`. It does
+**not** implement `SearchStrategy`. It stays representation-blind by taking an
+injected `CompeteFn` rather than importing any environment, preserving the
+`environments → search` dependency direction.
+**Consequences.** The `SearchStrategy` contract is untouched. The driver reuses
+`core/breeding.ts` (ADR-005) for selection/elitism, so only the *evaluation*
+model differs. Fitness = graded closeness payoff (a gradient before any capture,
+resisting disengagement) + competitive fitness sharing (diversity). Champions are
+archived in a bounded Hall of Fame. `captureRate` is the honest arms-race pulse
+since relative fitness is not comparable across generations.
+
+## ADR-005 — Selection and elitism extracted to `core/breeding.ts`
+**Context.** M9's driver needs the exact tournament-selection + elitism logic the
+`GenerationalGA` already had, privately. Duplicating it would violate the coding
+standard (no duplicated logic) and risk the two copies drifting.
+**Decision.** `tournamentSelect` and `reproduce(ranked, config, rng)` moved to
+`core/breeding.ts`; `GenerationalGA.step` and `CoevolutionDriver.step` both call
+`reproduce`. `GaConfig` is now an alias of `BreedingConfig`.
+**Consequences.** The RNG draw order in `reproduce` is identical to the GA's prior
+inline loop, so seeded runs remain byte-identical (existing `ga.test.ts`
+reproducibility tests pass unchanged). Selection behaviour now lives in one place.
