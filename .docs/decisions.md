@@ -80,3 +80,27 @@ CIAO champion history is accumulated in the adapter (not the driver), reading ea
 generation's champion from the just-scored incoming state per ADR-003. New
 environments plug in as one of the two adapters. Kept in `main.ts` (the composition
 root) so `app/` does not gain a dependency on `render/`.
+
+**Update (M10).** A third adapter, `MapElitesSimulation`, was added for `MapElites`
+(`search/mapElites.ts`): unlike `Runner` and `CoevolutionDriver`, MAP-Elites has no
+fixed-size population to advance through generations — it grows an archive
+indefinitely. `meta` reports archive coverage and best fitness found instead of a
+generation index. This confirms the adapter pattern generalises: a third,
+structurally different driver required zero changes to `Simulation` itself.
+
+## ADR-007 — `Genome.behaviour` is a true optional property, not `T | undefined`
+**Context.** M10's Novelty Search and MAP-Elites need environments to write a
+behaviour descriptor onto a genome. The natural first attempt —
+`behaviour: readonly number[] | undefined = undefined` on `Network` — fails to
+typecheck against `Genome`'s `readonly behaviour?: readonly number[]` under
+`exactOptionalPropertyTypes` (part of the project's full strictness set): that flag
+treats an optional property as either *absent* or *present with the declared type*,
+never explicitly `undefined`.
+**Decision.** `Network.behaviour` is declared `behaviour?: readonly number[];` with
+no initializer (a true optional property, absent until an environment sets it).
+`clone()` only assigns it when defined: `if (this.behaviour !== undefined) copy.behaviour = this.behaviour;`.
+**Consequences.** Objective-only environments (Weasel, XOR, cart-pole, track
+runner, predator-prey) never touch `behaviour` and it stays absent, exactly as
+before this milestone. Divergent-search environments (maze, gait) set it during
+`evaluate`. This is a narrow but easy-to-repeat mistake — any future optional field
+on `Genome` should follow the same pattern.
