@@ -16,6 +16,9 @@ import {
   PREDATOR_PREY_CAPTURE_RADIUS,
   type PredatorPreySnapshot,
 } from "../environments/predatorPrey.js";
+import type { TrackRunnerEnvironment, LiveTrackEpisode } from "../environments/trackrunner.js";
+import type { MazeEnvironment, LiveMazeEpisode } from "../environments/maze.js";
+import type { ArchiveEntry } from "../search/mapElites.js";
 
 /**
  * Renders one environment's best genome to a canvas. `onGeneration` is called
@@ -331,6 +334,192 @@ function heat(value: number): string {
   const g = Math.round(255 * (1 - Math.abs(t - 0.5) * 2));
   const b = Math.round(255 * Math.min(1, (1 - t) * 2));
   return `rgb(${r}, ${g}, ${b})`;
+}
+
+/** Track runner: the ring track, the champion's live drive, and its sensor rays. */
+export class TrackRunnerView implements EnvironmentView {
+  private episode: LiveTrackEpisode | null = null;
+  private champion: Network | null = null;
+
+  constructor(
+    private readonly ctx: CanvasRenderingContext2D,
+    private readonly width: number,
+    private readonly height: number,
+    private readonly environment: TrackRunnerEnvironment,
+  ) {}
+
+  onGeneration(result: GenerationResult): void {
+    this.champion = result.best as Network;
+    this.episode = this.environment.createEpisode(this.champion);
+  }
+
+  animate(): void {
+    if (this.champion === null) {
+      this.drawTrack();
+      return;
+    }
+    if (this.episode === null || !this.episode.step()) {
+      this.episode = this.environment.createEpisode(this.champion);
+      this.episode.step();
+    }
+    this.drawTrack();
+    this.drawCar(this.episode.snapshot);
+  }
+
+  private drawTrack(): void {
+    const { ctx, width, height } = this;
+    const { center, innerRadius, outerRadius } = this.environment.geometry;
+    const scale = Math.min(width, height);
+    const toPx = (x: number): number => x * scale;
+    ctx.fillStyle = COLORS.background;
+    ctx.fillRect(0, 0, width, height);
+    ctx.strokeStyle = COLORS.grid;
+    ctx.lineWidth = toPx(outerRadius - innerRadius);
+    ctx.beginPath();
+    ctx.arc(toPx(center), toPx(center), toPx((innerRadius + outerRadius) / 2), 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.lineWidth = 1;
+  }
+
+  private drawCar(snapshot: { x: number; y: number; heading: number; sensors: readonly number[] }): void {
+    const { ctx, width, height } = this;
+    const scale = Math.min(width, height);
+    const toPx = (x: number): number => x * scale;
+    const px = toPx(snapshot.x);
+    const py = toPx(snapshot.y);
+
+    ctx.strokeStyle = "rgba(129, 140, 248, 0.4)";
+    for (const [i, reading] of snapshot.sensors.entries()) {
+      const angle = snapshot.heading + [-Math.PI / 2, -Math.PI / 4, 0, Math.PI / 4, Math.PI / 2][i]!;
+      const length = toPx(reading * 0.5);
+      ctx.beginPath();
+      ctx.moveTo(px, py);
+      ctx.lineTo(px + Math.cos(angle) * length, py + Math.sin(angle) * length);
+      ctx.stroke();
+    }
+
+    ctx.fillStyle = COLORS.accent;
+    ctx.beginPath();
+    ctx.arc(px, py, 5, 0, Math.PI * 2);
+    ctx.fill();
+  }
+}
+
+/** Maze: the wall grid, the goal, and the champion's live run with sensor rays. */
+export class MazeView implements EnvironmentView {
+  private episode: LiveMazeEpisode | null = null;
+  private champion: Network | null = null;
+
+  constructor(
+    private readonly ctx: CanvasRenderingContext2D,
+    private readonly width: number,
+    private readonly height: number,
+    private readonly environment: MazeEnvironment,
+  ) {}
+
+  onGeneration(result: GenerationResult): void {
+    this.champion = result.best as Network;
+    this.episode = this.environment.createEpisode(this.champion);
+  }
+
+  animate(): void {
+    this.drawGrid();
+    if (this.champion === null) {
+      return;
+    }
+    if (this.episode === null || !this.episode.step()) {
+      this.episode = this.environment.createEpisode(this.champion);
+      this.episode.step();
+    }
+    this.drawAgent(this.episode.snapshot);
+  }
+
+  private cellSize(): number {
+    const { cols, rows } = this.environment.dimensions;
+    return Math.min(this.width / cols, this.height / rows);
+  }
+
+  private drawGrid(): void {
+    const { ctx } = this;
+    const cell = this.cellSize();
+    ctx.fillStyle = COLORS.background;
+    ctx.fillRect(0, 0, this.width, this.height);
+    const grid = this.environment.grid;
+    for (let row = 0; row < grid.length; row++) {
+      const line = grid[row] as readonly boolean[];
+      for (let col = 0; col < line.length; col++) {
+        if (line[col]) {
+          ctx.fillStyle = COLORS.grid;
+          ctx.fillRect(col * cell, row * cell, cell + 0.5, cell + 0.5);
+        }
+      }
+    }
+    const goal = this.environment.goal;
+    ctx.fillStyle = "#f97316";
+    ctx.fillRect(goal.col * cell, goal.row * cell, cell, cell);
+  }
+
+  private drawAgent(snapshot: { x: number; y: number; heading: number }): void {
+    const { ctx } = this;
+    const cell = this.cellSize();
+    const px = snapshot.x * cell;
+    const py = snapshot.y * cell;
+    ctx.fillStyle = COLORS.accent;
+    ctx.beginPath();
+    ctx.arc(px, py, cell * 0.3, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = COLORS.accent;
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(px, py);
+    ctx.lineTo(px + Math.cos(snapshot.heading) * cell * 0.6, py + Math.sin(snapshot.heading) * cell * 0.6);
+    ctx.stroke();
+    ctx.lineWidth = 1;
+  }
+}
+
+/**
+ * MAP-Elites archive: a heat map over (stride length, duty factor), each cell
+ * coloured by the fittest gait found there — the illuminated gallery of viable
+ * walking styles (PRD §10 Tier 2 #8; RESEARCH.md §3).
+ */
+export class GaitArchiveView {
+  constructor(
+    private readonly ctx: CanvasRenderingContext2D,
+    private readonly width: number,
+    private readonly height: number,
+    private readonly bounds: { strideLength: { min: number; max: number }; dutyFactor: { min: number; max: number } },
+    private readonly bins: number,
+  ) {}
+
+  draw(entries: readonly ArchiveEntry[]): void {
+    const { ctx, width, height } = this;
+    ctx.fillStyle = COLORS.background;
+    ctx.fillRect(0, 0, width, height);
+
+    const cellW = width / this.bins;
+    const cellH = height / this.bins;
+    let maxFitness = 0;
+    for (const entry of entries) maxFitness = Math.max(maxFitness, entry.genome.fitness);
+
+    for (const entry of entries) {
+      const [strideBin, dutyBin] = entry.cell;
+      const t = maxFitness > 0 ? entry.genome.fitness / maxFitness : 0;
+      ctx.fillStyle = `rgba(129, 140, 248, ${0.25 + 0.75 * t})`;
+      ctx.fillRect((strideBin ?? 0) * cellW, height - ((dutyBin ?? 0) + 1) * cellH, cellW - 1, cellH - 1);
+    }
+
+    ctx.strokeStyle = COLORS.grid;
+    ctx.strokeRect(0, 0, width, height);
+    ctx.fillStyle = COLORS.muted;
+    ctx.font = "11px ui-monospace, monospace";
+    ctx.fillText(`stride length ${this.bounds.strideLength.min}–${this.bounds.strideLength.max} →`, 6, height - 4);
+    ctx.save();
+    ctx.translate(12, height - 8);
+    ctx.rotate(-Math.PI / 2);
+    ctx.fillText(`duty factor ↑`, 0, 0);
+    ctx.restore();
+  }
 }
 
 /** Precomputes the Rastrigin surface as a heat map into an offscreen canvas. */

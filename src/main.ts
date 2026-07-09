@@ -3,6 +3,8 @@ import { GenerationalGA } from "./core/ga.js";
 import { Network } from "./core/network.js";
 import { Runner } from "./app/runner.js";
 import { CoevolutionDriver, type CoevolutionState } from "./search/coevolution.js";
+import { NoveltySearch } from "./search/novelty.js";
+import { MapElites } from "./search/mapElites.js";
 import { drawFitnessChart, drawCaptureRateChart, COLORS } from "./render/chart.js";
 import {
   type EnvironmentView,
@@ -11,11 +13,17 @@ import {
   TspView,
   CartPoleView,
   PredatorPreyView,
+  TrackRunnerView,
+  MazeView,
+  GaitArchiveView,
 } from "./render/views.js";
 import { WeaselEnvironment } from "./environments/weasel.js";
 import { LandscapeEnvironment } from "./environments/landscape.js";
 import { TspEnvironment } from "./environments/tsp.js";
 import { CartPoleEnvironment } from "./environments/cartpole.js";
+import { TrackRunnerEnvironment } from "./environments/trackrunner.js";
+import { MazeEnvironment } from "./environments/maze.js";
+import { GaitEnvironment } from "./environments/gait.js";
 import {
   PredatorPreyEnvironment,
   type LivePredatorPreyEpisode,
@@ -147,6 +155,36 @@ class CoevolutionSimulation implements Simulation {
   }
 }
 
+/**
+ * Adapts {@link MapElites} to {@link Simulation}. Unlike a generational
+ * population, the archive only grows and improves — there is no "generation" of
+ * evaluated genomes to read stats from, so `meta` reports archive coverage and
+ * the best distance found instead.
+ */
+class MapElitesSimulation implements Simulation {
+  meta: string;
+
+  constructor(
+    readonly evolveInterval: number,
+    private readonly elites: MapElites,
+    private readonly environment: GaitEnvironment,
+    private readonly view: GaitArchiveView,
+    private readonly summary: string,
+  ) {
+    this.meta = `starting ${summary}…`;
+  }
+
+  advance(): void {
+    this.elites.step(this.environment.spawn, this.environment.evaluate);
+    const best = this.elites.entries.reduce((max, entry) => Math.max(max, entry.genome.fitness), 0);
+    this.meta = `archive cells filled: ${this.elites.size}   best distance: ${best.toFixed(2)}\n${this.summary}`;
+  }
+
+  frame(): void {
+    this.view.draw(this.elites.entries);
+  }
+}
+
 interface EnvironmentOption {
   readonly label: string;
   build(stage: CanvasRenderingContext2D, chart: CanvasRenderingContext2D): Simulation;
@@ -255,6 +293,95 @@ const OPTIONS: Record<string, EnvironmentOption> = {
         new CartPoleView(stage, STAGE_WIDTH, STAGE_HEIGHT, env),
         chart,
         "balance the pole across 3 varied starts",
+      );
+    },
+  },
+  trackrunner: {
+    label: "Track runner — raycast sensors (episodic)",
+    build(stage, chart) {
+      const rng = new Rng(SEED);
+      const env = new TrackRunnerEnvironment(6, rng);
+      const ga = new GenerationalGA(
+        { populationSize: 150, eliteCount: 2, tournamentSize: 5, mutationRate: 0.2 },
+        rng,
+      );
+      return new GaSimulation(
+        10,
+        new Runner(env, ga, 150),
+        new TrackRunnerView(stage, STAGE_WIDTH, STAGE_HEIGHT, env),
+        chart,
+        "drive the ring without hitting a wall — checkpoints·K + distance",
+      );
+    },
+  },
+  mazeObjective: {
+    label: "Maze — objective GA (proximity fitness)",
+    build(stage, chart) {
+      const rng = new Rng(SEED);
+      const env = new MazeEnvironment(6, rng);
+      const ga = new GenerationalGA(
+        { populationSize: 150, eliteCount: 2, tournamentSize: 5, mutationRate: 0.2 },
+        rng,
+      );
+      return new GaSimulation(
+        10,
+        new Runner(env, ga, 150),
+        new MazeView(stage, STAGE_WIDTH, STAGE_HEIGHT, env),
+        chart,
+        "fitness = 1/(1+distance to goal); a dead-end pocket scores well but leads nowhere",
+      );
+    },
+  },
+  mazeNovelty: {
+    label: "Maze — Novelty Search (same maze, different selection)",
+    build(stage, chart) {
+      const rng = new Rng(SEED);
+      const env = new MazeEnvironment(6, rng);
+      const novelty = new NoveltySearch(
+        {
+          populationSize: 150,
+          eliteCount: 2,
+          tournamentSize: 5,
+          mutationRate: 0.2,
+          neighbours: 8,
+          archiveThreshold: 0.03,
+          archiveLimit: 400,
+        },
+        rng,
+      );
+      return new GaSimulation(
+        10,
+        new Runner(env, novelty, 150),
+        new MazeView(stage, STAGE_WIDTH, STAGE_HEIGHT, env),
+        chart,
+        "same environment, same network genome — selection ignores the goal and rewards visiting new places instead (Lehman & Stanley, 2011)",
+      );
+    },
+  },
+  gait: {
+    label: "Gait — MAP-Elites (illuminates the archive)",
+    build(stage) {
+      const rng = new Rng(SEED);
+      const env = new GaitEnvironment(6, rng);
+      const bins = 20;
+      const elites = new MapElites(
+        {
+          dimensions: [
+            { min: GaitEnvironment.BEHAVIOUR_BOUNDS.strideLength.min, max: GaitEnvironment.BEHAVIOUR_BOUNDS.strideLength.max, bins },
+            { min: GaitEnvironment.BEHAVIOUR_BOUNDS.dutyFactor.min, max: GaitEnvironment.BEHAVIOUR_BOUNDS.dutyFactor.max, bins },
+          ],
+          initialPopulation: 200,
+          batchSize: 40,
+          mutationRate: 0.3,
+        },
+        rng,
+      );
+      return new MapElitesSimulation(
+        3,
+        elites,
+        env,
+        new GaitArchiveView(stage, STAGE_WIDTH, STAGE_HEIGHT, GaitEnvironment.BEHAVIOUR_BOUNDS, bins),
+        "each cell is the fittest gait found at that (stride length, duty factor) — a gallery, not one winner",
       );
     },
   },
