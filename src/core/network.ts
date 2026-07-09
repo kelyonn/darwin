@@ -25,6 +25,18 @@ interface LayerSpec {
   readonly biasOffset: number;
 }
 
+/**
+ * Read-only view of a network's topology and weights, for rendering (PRD §9
+ * observability — e.g. the XOR wiring diagram). Exposes the same layer/weight
+ * layout `feedForward` uses internally, without giving the caller a mutable
+ * handle on either.
+ */
+export interface NetworkInspection {
+  readonly layerSizes: readonly number[];
+  readonly layers: readonly LayerSpec[];
+  readonly weights: Float32Array;
+}
+
 function sigmoid(x: number): number {
   return 1 / (1 + Math.exp(-x));
 }
@@ -133,6 +145,11 @@ export class Network implements Genome {
     }
 
     return this.activations[this.activations.length - 1] as Float32Array;
+  }
+
+  /** Snapshot of topology and weights for visualising the network (PRD §9). */
+  inspect(): NetworkInspection {
+    return { layerSizes: this.config.layerSizes, layers: this.layers, weights: this.weights };
   }
 
   clone(): Network {

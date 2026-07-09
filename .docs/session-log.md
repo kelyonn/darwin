@@ -2,6 +2,49 @@
 
 Newest first. One entry per working session: what changed, decisions, next step.
 
+## Session 5 — specimen-plate visual redesign
+- **Implemented a Claude Design handoff.** A design mockup
+  (`project-darwin-design-system/`, a Claude Design HTML/CSS/JS export) specified a
+  "field-guide specimen plate" visual language — paper/ink palette, a circular lens
+  viewport per environment, radial leader-line annotations, and a bottom-right inset
+  panel (fitness sparkline, CIAO heat map, or MAP-Elites archive heat map depending on
+  the environment) — replacing the original dark dashboard UI. Ported pixel-for-pixel
+  into the real engine's rendering layer rather than the mockup's own duplicate engine.
+- **`src/render/palette.ts` (new):** shared palette (paper/ink/moss/amber) and drawing
+  primitives (`dot`, `inkAgent`, `annotate`, `drawLens`, `drawInsetPanel`,
+  `drawSparkline`, `heatColor`). `src/render/chart.ts` deleted — its role is now the
+  inset sparkline.
+- **`src/render/views.ts` rewritten** to draw full 1180×740 plates: all nine
+  environments (Weasel, Landscape, TSP, Cart-pole, Track Runner, XOR, Predator–Prey,
+  Maze, Gait) now render in the specimen-plate style. XOR is newly wired in (was
+  implemented but not on the menu); the maze's objective and novelty runs are now one
+  combined dual-lens tab instead of two separate menu entries.
+- **`Network.inspect()` added** (`src/core/network.ts`) — a read-only
+  `{ layerSizes, layers, weights }` snapshot so the render layer can draw the XOR
+  wiring diagram without `core/` exposing mutable internals. `XOR_CASES` exported from
+  `xor.ts` so the truth-table view reuses the environment's own case data instead of
+  duplicating it.
+- **`src/main.ts` rewritten**: single 1180×740 stage canvas (no separate chart canvas);
+  header block + roman-numeral tab bar + plate frame + footnote paragraph, matching the
+  mockup's DOM structure; `Simulation.meta` (a free-text string) replaced with a
+  structured `Readout` (`generation`, `metricLabel`/`metricValue`,
+  optional `secondary`) so the top-right overlay can be driven declaratively. Added a
+  `MazeSimulation` adapter that advances a `GenerationalGA` and a `NoveltySearch`
+  population together on the same maze topology.
+- **`index.html`** swapped from the dark indigo theme to the paper background +
+  JetBrains Mono font import the design specifies.
+- **Verified in-browser** (see .claude/launch.json — `autoPort: true` added so a second
+  concurrent dev-server session doesn't collide on port 5199): all nine tabs render
+  correctly with no console errors — predator–prey chase + CIAO inset, Weasel's
+  alphabet ring, Landscape's Rastrigin heatmap, TSP route, cart-pole, the track ring,
+  the maze's dual lens with the novelty scatter, the MAP-Elites archive heat map, and
+  the XOR wiring diagram + live truth table.
+- **Tests:** 82/82 passing, unchanged (no render-layer tests existed before or after);
+  `tsc --noEmit` clean.
+- **Next:** the design handoff files (`project-darwin-design-system/`, `Project Darwin
+  Design System-handoff.zip`) are still sitting in the repo root, untracked — ask the
+  user whether to delete them or keep them for reference before committing.
+
 ## Session 4 — M6 track runner, M10 novelty search + MAP-Elites
 - **M6 built.** `environments/trackrunner.ts`: a ring track, 5-ray sensors, progress-led
   fitness (`checkpoints·K + distance`). Reused the episodic pattern from cart-pole. Verified

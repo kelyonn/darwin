@@ -3,8 +3,8 @@ import type { Genome } from "../core/genome.js";
 import type { Rng } from "../core/rng.js";
 import { Network, type NetworkConfig } from "../core/network.js";
 
-/** The four XOR training cases: inputs and their expected output. */
-const XOR_CASES: ReadonlyArray<{ readonly input: readonly [number, number]; readonly target: number }> = [
+/** The four XOR training cases: inputs and their expected output. Exported for rendering the truth table. */
+export const XOR_CASES: ReadonlyArray<{ readonly input: readonly [number, number]; readonly target: number }> = [
   { input: [0, 0], target: 0 },
   { input: [0, 1], target: 1 },
   { input: [1, 0], target: 1 },
