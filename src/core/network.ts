@@ -47,6 +47,14 @@ function sigmoid(x: number): number {
 export class Network implements Genome {
   fitness = 0;
 
+  /**
+   * Behaviour descriptor, written by divergent-search environments (maze,
+   * gait) and read by Novelty Search and MAP-Elites. Objective selection ignores
+   * it. Left unset (absent) by objective environments; `exactOptionalPropertyTypes`
+   * forbids assigning `undefined` explicitly, so this is a true optional property.
+   */
+  behaviour?: readonly number[];
+
   private readonly layers: readonly LayerSpec[];
   private readonly outputActivation: OutputActivation;
   /** Scratch activation buffers, one per layer (index 0 is the input). */
@@ -130,6 +138,9 @@ export class Network implements Genome {
   clone(): Network {
     const copy = new Network(this.config, new Float32Array(this.weights), this.rng);
     copy.fitness = this.fitness;
+    if (this.behaviour !== undefined) {
+      copy.behaviour = this.behaviour;
+    }
     return copy;
   }
 
