@@ -9,8 +9,33 @@ export interface BreedingConfig {
   readonly eliteCount: number;
   /** Candidates drawn per tournament; the fittest wins a breeding slot. */
   readonly tournamentSize: number;
-  /** Per-locus mutation rate passed to {@link Genome.mutate}. */
+  /**
+   * Mutation intensity passed to {@link Genome.mutate} — a "temperature" each
+   * genome interprets in its own way (flip probability for strings, swap count
+   * for permutations, perturbation size for vectors and networks).
+   */
   readonly mutationRate: number;
+  /**
+   * Per-generation multiplier applied to `mutationRate` — the cooling schedule
+   * that shifts search from exploration to refinement (PRD §7, "explore early,
+   * refine late"). Must be in `(0, 1]`. Defaults to `1` (no decay), which keeps
+   * behaviour byte-identical to a run without a schedule.
+   */
+  readonly mutationDecay?: number;
+  /** Floor the annealed rate never drops below, so mutation never fully stops. Defaults to `0`. */
+  readonly minMutationRate?: number;
+}
+
+/**
+ * The mutation rate after `generation` generations of cooling:
+ * `max(minMutationRate, mutationRate · mutationDecay ** generation)`.
+ * With the defaults (`mutationDecay = 1`) this is a constant, so seeded runs
+ * without a schedule reproduce byte-for-byte.
+ */
+export function annealedRate(config: BreedingConfig, generation: number): number {
+  const decay = config.mutationDecay ?? 1;
+  const floor = config.minMutationRate ?? 0;
+  return Math.max(floor, config.mutationRate * decay ** generation);
 }
 
 /**

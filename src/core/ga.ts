@@ -1,7 +1,7 @@
 import type { Genome } from "./genome.js";
 import type { Rng } from "./rng.js";
 import type { SearchStrategy } from "./search.js";
-import { reproduce, type BreedingConfig } from "./breeding.js";
+import { reproduce, annealedRate, type BreedingConfig } from "./breeding.js";
 
 /** Tuning parameters for {@link GenerationalGA}. */
 export type GaConfig = BreedingConfig;
@@ -16,6 +16,8 @@ export type GaConfig = BreedingConfig;
  * across generations.
  */
 export class GenerationalGA implements SearchStrategy {
+  private generation = 0;
+
   constructor(
     private readonly config: GaConfig,
     private readonly rng: Rng,
@@ -41,6 +43,8 @@ export class GenerationalGA implements SearchStrategy {
     // preserve prior order — a prerequisite for reproducibility.
     const ranked = [...population].sort((a, b) => b.fitness - a.fitness);
 
-    return reproduce(ranked, this.config, this.rng);
+    const rate = annealedRate(this.config, this.generation);
+    this.generation++;
+    return reproduce(ranked, { ...this.config, mutationRate: rate }, this.rng);
   }
 }

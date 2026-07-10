@@ -1,6 +1,6 @@
 import type { Genome } from "../core/genome.js";
 import type { Rng } from "../core/rng.js";
-import { reproduce, type BreedingConfig } from "../core/breeding.js";
+import { reproduce, annealedRate, type BreedingConfig } from "../core/breeding.js";
 
 /**
  * The result of one predator-versus-prey contest, from the predator's frame.
@@ -218,12 +218,17 @@ export class CoevolutionDriver {
       captureRate: contestCount > 0 ? captureCount / contestCount : 0,
       hallOfFameSize: this.predatorHallOfFame.length,
     };
+    // Cool both populations on the same schedule (only active if the config
+    // opts into decay; predator–prey uses a very gentle one so an arms race
+    // never over-cools). Both populations use one rate so the race stays fair.
+    const rate = annealedRate(this.config, this.generation);
+    const breedingConfig = { ...this.config, mutationRate: rate };
     this.generation++;
 
     return {
       next: {
-        predators: reproduce(rankedPredators, this.config, this.rng),
-        prey: reproduce(rankedPrey, this.config, this.rng),
+        predators: reproduce(rankedPredators, breedingConfig, this.rng),
+        prey: reproduce(rankedPrey, breedingConfig, this.rng),
       },
       stats,
     };
