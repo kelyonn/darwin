@@ -62,11 +62,10 @@ individually (not assumed fine because tests pass) in response to a report that
 several plates looked stuck:
 - **Landscape, cart-pole:** confirmed fixed by the eliteCount change above.
 - **Track runner:** the reward-hacking exploit above, now fixed.
-- **Maze (objective side):** confirmed genuinely solving — champion's final
-  position measured at 0.45 units from the goal centre, inside the 0.6 solve
-  radius, at the fitness value (~0.69) already on record. Not a bug; the
-  known-good caveat is the *behavioural contrast with novelty* being weaker than
-  textbook (separate section below), not that it fails to solve.
+- **Maze:** originally looked "solved" by objective (fitness ~0.69) but this
+  turned out to be a much deeper issue than a weak dead end — see the maze
+  section below for the full story and the actual fix (episode-ending
+  collision).
 - **Gait / MAP-Elites:** confirmed genuine locomotion, not degenerate flopping.
   The archive fills with real fitness variation (0 to ~9.2 within the 400-tick
   evaluation window); replaying the best genome for longer than its evaluation
@@ -82,21 +81,47 @@ several plates looked stuck:
 - **No automatic disengagement detection.** The CIAO plot *shows* cycling but nothing
   reads it back to trigger a stabiliser. Listed in future-work.
 
-## M10 — maze deception is weaker than textbook
-- **Measured, not assumed:** headless comparison across 3 seeds (60 generations, pop 150)
-  shows objective GA plateaus around proximity-score 0.69 regardless of seed, and Novelty
-  Search is statistically comparable (not clearly ahead). A dead-end pocket (`DEAD_END` in
-  `maze.ts`) and a tightened step budget were added and re-measured, but the classic
-  "objective gets stuck, novelty escapes" separation from Lehman & Stanley (2011) did not
-  reproduce strongly at these settings within the time available this session.
-- **UI is labelled honestly** to reflect this (`main.ts` maze option summaries describe the
-  mechanism, not a guaranteed outcome) rather than overclaiming.
-- **Why left as-is:** the environment still correctly demonstrates the *architectural* claim
-  (swap `GenerationalGA` for `NoveltySearch` with zero core changes — the actual point of
-  the selection-pressure axis). Making the behavioural contrast textbook-strength needs a
-  harder maze topology or a stricter time budget than was worth tuning under this session's
-  time budget. Revisit before using this as a research or interview talking point about
-  novelty search specifically "beating" objective search.
+## M10 — maze: the real fix was episode-ending collision, not trap geometry (resolved — see ADR-010)
+- **Original symptom:** objective GA reached a proximity score of ~0.69 within a
+  handful of generations regardless of seed, and Novelty Search wasn't measurably
+  ahead of it — the intended "objective gets deceived, novelty escapes" contrast
+  (Lehman & Stanley, 2011) wasn't showing up.
+- **Three rounds of trap-geometry tuning did not fix it (all measured, all
+  discarded in turn):**
+  1. A single dead-end pocket far from the true path — too weak, easily avoided.
+  2. A repositioned single trap at the exact point the true path must turn away
+     from the goal, plus a longer episode budget — objective still solved
+     *at generation 1*, from pure random initialization, across all 3 seeds.
+  3. Two traps at both such turn points, plus a much tighter goal radius
+     (0.6 → 0.2) — objective *still* solved at generation 1 on 1 of 3 seeds, and
+     the underlying reason became clear from the numbers: colliding with a wall
+     only blocked that tick's movement (the episode kept going, heading kept
+     changing), so an undirected random network could just keep re-steering
+     until it eventually shuffled all the way through — trap count and goal
+     radius were never the actual bottleneck.
+- **The actual fix:** make hitting a wall end the episode immediately (matching
+  cart-pole and track runner, which already treat a crash as fatal). A wrong
+  turn into a dead end is now a real, fatal mistake, not a harmless bump.
+  Measured effect: gen-1 random luck now fails on 2 of 3 seeds (previously 3 of
+  3 always succeeded), and the objective population shows a genuine, watchable
+  multi-generation learning curve — fitness climbing from 0 to a solved route
+  over roughly 1–5 generations, verified across seeds and visible live in the
+  browser (fitness sparkline visibly rising, not flat).
+- **What this does *not* achieve, honestly:** objective reliably solving within
+  a handful of generations, not failing outright. With a 150-genome population
+  and real elitism, evolutionary search is simply very effective at small mazes
+  — once even one lucky lineage partially escapes a trap, strong selection
+  pressure propagates it fast. Pushing objective toward reliable multi-generation
+  *failure* would need a substantially larger/more complex maze; this was
+  explicitly decided against (see ADR-010) since the user's actual goal —
+  watching both sides constructively, verifiably learn — was already met.
+- **The honest, shipped story:** Novelty Search solves immediately by
+  exploration alone (never tempted by either trap); Objective GA has to
+  genuinely learn to avoid two dead ends and typically does so within a
+  handful of generations. The contrast on display is *immediate exploration
+  vs. a few generations of real learning*, not solve vs. stall — still a
+  legitimate, verified demonstration of the two paradigms behaving differently
+  on an identical deceptive landscape.
 
 ## M10 — gait physics is intentionally minimal
 - `gait.ts` uses a single point-mass + one spring leg (stance/flight phases), not a
@@ -106,10 +131,26 @@ several plates looked stuck:
   short run) but is not a general-purpose physics simulator — do not extend it toward
   multi-limb creatures without reconsidering the approach.
 
+## XOR readout was misleading, not the network (fixed)
+- **Symptom:** a genuinely fully-correct network (all four cases on the right side of
+  0.5) could still read "fitness 3.8 / 4" and look permanently unfinished, because the
+  sigmoid output never reaches exactly 0 or 1 — the last stretch toward fitness 4.0 is
+  an asymptotic crawl that never visually resolves.
+- **Fix:** added a `cases solved: n/4` indicator (readout secondary line + a prominent
+  on-canvas badge in `XorView`) that counts cases on the correct side of the 0.5
+  threshold — it reads `4/4` the instant the network is actually correct, independent
+  of the raw fitness decimal. Verified reliable across 10 seeds (10/10 reached 4/4
+  under the demo's exact config) — `test/xor.test.ts` locks this in as a regression.
+
 ## Rendering / preview
 - The headless preview throttles `requestAnimationFrame` between paints, so episodic
   environments (cart-pole, predator–prey) appear to advance slowly there; they run at
   60 FPS in a real browser.
+- Observed this session: with the preview tab in a backgrounded/hidden state
+  (`document.hidden === true`), `requestAnimationFrame` did not fire *at all* (verified
+  directly — zero callbacks after 500ms), not just throttled. Taking a screenshot
+  reliably forces one frame to render regardless, so verification is still possible —
+  just one frame per screenshot call rather than continuous playback.
 - The predator–prey view is fixed at the 640×360 stage; the CIAO heatmap caps display
   at the most recent 60 generations for legibility (older history is retained in memory
   but not drawn).

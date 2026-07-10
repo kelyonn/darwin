@@ -194,3 +194,58 @@ General lesson for this codebase: a population "plateauing at a suspiciously
 round-looking maximum" is itself a signal to check whether that number is the
 *intended* optimum or an *exploitable* one — replay the champion and inspect its
 actual behaviour, don't just look at the fitness curve.
+
+## ADR-010 — Maze: episode-ending wall collision, not trap geometry, is what makes objective genuinely learn
+**Context.** The maze's objective side reached ~0.69 proximity fitness within a
+handful of generations regardless of seed, with no measurable advantage for
+Novelty Search — the intended Lehman & Stanley (2011) "objective is deceived,
+novelty escapes" contrast wasn't showing up. Three rounds of trap-geometry
+tuning were tried and measured, each discarded in turn: a single far-off dead
+end (too weak); a single trap repositioned to the exact turn-away point, plus a
+larger episode budget (objective still solved at generation 1 — pure random
+init — across all 3 test seeds); two traps at both turn-away points plus a
+much tighter goal radius, 0.6 → 0.2 (objective *still* solved at generation 1
+on 1 of 3 seeds). The common thread across all three failures: `advance()`
+*blocked* movement into a wall rather than ending the episode — the agent lost
+nothing by trying, could keep re-steering indefinitely, so an undirected random
+network given ~400 ticks would eventually shuffle through the single connected
+corridor by sheer persistence, almost independent of trap count or placement.
+**Decision.** Make wall contact end the episode immediately, matching cart-pole
+and track runner (both already treat a crash as fatal). `MazeEnvironment.advance`
+now returns `false` on a would-be wall collision instead of silently blocking;
+`evaluate` and `createEpisode` both stop there.
+**Consequences (measured).** Gen-1 random luck now fails on 2 of 3 seeds
+(previously 3 of 3 always succeeded) — a real, measured improvement, not a full
+fix. The objective population still reliably finds the route within roughly
+1–5 generations of real evolutionary refinement (150 genomes with elitism is
+simply effective at small mazes — a known property of population search, not a
+bug), so this does **not** make objective fail outright. Presented with that
+finding, the user chose to ship it: the verified story is "Novelty solves
+immediately by exploration; Objective has to genuinely learn to avoid two dead
+ends and typically does so within a handful of generations" — immediate
+exploration vs. a few generations of real learning, not solve vs. stall.
+Escalating toward reliable multi-generation objective *failure* would need a
+substantially larger/more complex maze and was explicitly declined as
+disproportionate once the actual goal (watching both sides constructively,
+verifiably learn) was already met. `test/maze.test.ts` locks in both halves of
+this story as regressions, across 3 seeds each. See `.docs/known-issues.md` for
+the full numeric trace of all three discarded attempts.
+
+## ADR-011 — XOR needed a `cases solved n/4` signal because the sigmoid asymptote makes correctness invisible
+**Context.** Reported as "XOR isn't done" — a genuinely fully-correct network
+(all four cases on the right side of the 0.5 decision threshold) can still read
+"fitness 3.8 / 4" indefinitely, because a sigmoid output never reaches exactly 0
+or 1, so the last stretch toward fitness 4.0 is an asymptotic crawl that never
+visually resolves. Verified the network itself was not at fault: 10/10 seeds
+reached 4/4 correct classification under the demo's exact config.
+**Decision.** Added a `cases solved: n/4` signal in two places: the shared
+readout's secondary line (`GaSimulation` gained an optional
+`secondaryMetric(champion) => {label, value}` callback, computed from the
+champion genome itself rather than its scalar fitness) and a prominent on-canvas
+badge in `XorView`. Both count cases whose live output already lands on the
+correct side of 0.5, so they read `4/4` the instant the network is functionally
+correct, independent of the fitness decimal.
+**Consequences.** `GaSimulation`'s new parameter is optional and additive — every
+other environment using it is unaffected. `test/xor.test.ts` gained a multi-seed
+regression asserting 4/4 reliability under the demo's own config, so this is
+locked in as measured fact, not a one-off observation.

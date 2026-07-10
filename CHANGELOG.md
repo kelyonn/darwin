@@ -6,6 +6,44 @@ unreleased, so entries are grouped by milestone rather than version.
 
 ## [Unreleased]
 
+### Added — XOR "cases solved" signal
+- `GaSimulation` gained an optional `secondaryMetric(champion) => {label, value}`
+  callback (computed from the champion genome, not just its fitness scalar) —
+  additive, every other environment using `GaSimulation` is unaffected.
+- XOR now shows `cases solved: n/4` in both the shared readout and a prominent
+  on-canvas badge in `XorView`, flipping to 4/4 the instant the network is
+  actually correct — independent of the sigmoid's asymptotic fitness decimal,
+  which could read "3.8 / 4" forever even on a fully-correct network.
+- `test/xor.test.ts`: multi-seed regression (10/10) locking in 4/4 reliability
+  under the demo's exact config. See `.docs/decisions.md` ADR-011.
+
+### Added — track runner and maze trajectory trails
+- `TrackRunnerView` and `MazeDuoView` (both lenses) now draw a fading
+  trajectory trail behind the live agent, cleared on every episode restart, so
+  a completed lap or maze traversal is visible as a path, not just a moving dot.
+- Track runner's readout gained an approximate lap-count secondary metric.
+
+### Fixed — maze: episode-ending collision was the real deception fix
+- Three rounds of trap-geometry tuning (repositioning, doubling the trap count,
+  tightening the goal radius to 0.2) all failed to stop gen-1 *random* genomes
+  from solving the maze — the actual cause: hitting a wall only blocked that
+  tick's movement, so an undirected network could keep re-steering indefinitely
+  and eventually shuffle through the single connected corridor within the
+  episode's ~400-tick budget, almost regardless of trap placement.
+- `MazeEnvironment.advance` now ends the episode immediately on wall contact,
+  matching cart-pole and track runner. Measured effect: gen-1 random luck now
+  fails on 2 of 3 seeds (previously 3 of 3 always succeeded), and the objective
+  population shows a genuine, watchable learning curve — fitness climbing from
+  0 to solved over roughly 1–5 generations.
+- This does not make objective fail outright (elitist search over 150 genomes
+  is simply effective at small mazes) — the user was presented this finding and
+  chose to ship the verified story: Novelty solves immediately by exploration,
+  Objective genuinely learns to avoid two dead ends within a handful of
+  generations. See `.docs/decisions.md` ADR-010 for the full trace of all three
+  discarded attempts.
+- `test/maze.test.ts`: regressions locking in both halves of this story across
+  3 seeds each, plus a direct check that an episode ends on wall contact.
+
 ### Fixed — track runner reward-hacking exploit
 - Root cause (measured, replaying the champion and recording its trajectory):
   fitness counted raw angular sectors crossed, so hugging the track's inner wall

@@ -19,7 +19,7 @@ something running.
 | M11 | `headless/runExperiment.ts` — batch runner | ⬜ | research substrate (RESEARCH.md §7) |
 | M12 | Scale: `kernel/gpu.ts` (WebGPU) + `kernel/wasm.ts`; three-backend benchmark | ⬜ | large, separate effort; measure — never fabricate (PRD §8) |
 
-Test status: **88 passing** across 17 files. Typecheck clean under full strict mode.
+Test status: **92 passing** across 17 files. Typecheck clean under full strict mode.
 
 ## Current focus
 M6, M9, and M10 are all **complete and demoable**.
@@ -30,14 +30,31 @@ ceiling that turned out to be exactly the theoretical max for that exploit (315)
 driving skill. A naive monotonic radius weight just relocated the exploit to the outer wall
 (measured, then discarded). The fix is a tent-shaped weight peaking at the track's midline —
 verified the champion now drives centred (radius 0.3099–0.3101 against a true midline of 0.31),
-with a regression test locking this in. Full trace in ADR-009 / known-issues.md.
+with a regression test locking this in. A fading trajectory trail + lap-count readout were added
+so the lap is watchable, not just numerically correct. Full trace in ADR-009 / known-issues.md.
+
+**Maze — episode-ending collision fix (ADR-010):** what looked like weak deception was actually
+that hitting a wall only blocked movement (episode kept going), so undirected random networks
+could shuffle through the whole corridor given ~400 ticks regardless of trap count — measured
+across three discarded trap-geometry redesigns before finding this. Making a wall hit end the
+episode (matching cart-pole/track runner) fixed gen-1 random luck on 2 of 3 seeds and gave the
+objective population a genuine, watchable multi-generation learning curve. It does not make
+objective fail outright (150-genome elitist search is simply effective at small mazes) — presented
+to the user, who chose to ship the verified story as-is: Novelty solves immediately by exploration,
+Objective genuinely learns to avoid two dead ends within a handful of generations. Trails added to
+both lenses. Full trace in ADR-010 / known-issues.md.
+
+**XOR readout fix (ADR-011):** a fully-correct network could read "3.8 / 4" forever since sigmoid
+never outputs exactly 0/1. Added a `cases solved n/4` indicator (readout + on-canvas badge) that
+flips to 4/4 the instant the network is actually correct — verified 10/10 seeds reach 4/4 under
+the demo's config.
 
 **Verification pass:** in response to a report that several environments "aren't finishing their
 tasks," every GA/search-driven environment was individually re-checked (not assumed fine because
-tests pass). Landscape and cart-pole were the earlier eliteCount fix; track runner is the exploit
-above; maze and gait were both confirmed genuinely working (maze's champion reaches within 0.45
-units of the goal; gait's best genome sustains 27+ units of real hopping locomotion when replayed
-beyond its evaluation window). See known-issues.md for the full per-environment findings.
+tests pass). Landscape and cart-pole were the earlier eliteCount fix; track runner and maze are the
+fixes above; gait was confirmed genuinely working (best genome sustains 27+ units of real hopping
+locomotion when replayed beyond its evaluation window). See known-issues.md for the full
+per-environment findings.
 
 **M9** (predator–prey co-evolution): a distinct `CoevolutionDriver` drives two populations with
 shared-sampling opponents, a Hall of Fame, and competitive fitness sharing (Rosin & Belew), plus a
