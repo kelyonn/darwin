@@ -22,10 +22,10 @@ import { WeaselEnvironment } from "./environments/weasel.js";
 import { LandscapeEnvironment } from "./environments/landscape.js";
 import { TspEnvironment } from "./environments/tsp.js";
 import { CartPoleEnvironment } from "./environments/cartpole.js";
-import { TrackRunnerEnvironment } from "./environments/trackrunner.js";
+import { TrackRunnerEnvironment, CHECKPOINTS, CHECKPOINT_REWARD } from "./environments/trackrunner.js";
 import { MazeEnvironment, type LiveMazeEpisode, type MazeSnapshot } from "./environments/maze.js";
 import { GaitEnvironment, type LiveGaitEpisode } from "./environments/gait.js";
-import { XorEnvironment } from "./environments/xor.js";
+import { XorEnvironment, XOR_CASES } from "./environments/xor.js";
 import {
   PredatorPreyEnvironment,
   type LivePredatorPreyEpisode,
@@ -78,15 +78,23 @@ class GaSimulation implements Simulation {
     private readonly view: EnvironmentView,
     private readonly metricLabel: string,
     private readonly formatMetric: (best: number) => string,
+    /**
+     * Optional second readout line computed from the champion genome itself
+     * (not just its scalar fitness) — e.g. XOR's "cases solved n/4", which is a
+     * clearer progress signal than a sigmoid-asymptoting fitness value.
+     */
+    private readonly secondaryMetric?: (champion: Genome) => { label: string; value: string },
   ) {}
 
   advance(): void {
     const result = this.runner.advance();
     this.view.onGeneration(result);
+    const secondary = this.secondaryMetric?.(result.best);
     this.readout = {
       generation: result.generation,
       metricLabel: this.metricLabel,
       metricValue: this.formatMetric(result.stats.best),
+      ...(secondary !== undefined ? { secondary } : {}),
     };
   }
 
@@ -238,6 +246,8 @@ class MazeSimulation implements Simulation {
   private novBest: Network | null = null;
   private objEpisode: LiveMazeEpisode | null = null;
   private novEpisode: LiveMazeEpisode | null = null;
+  private objEpisodeIsNew = false;
+  private novEpisodeIsNew = false;
 
   constructor(
     readonly evolveInterval: number,
@@ -253,11 +263,13 @@ class MazeSimulation implements Simulation {
     const objResult = this.objRunner.advance();
     this.objBest = objResult.best as Network;
     this.objEpisode = this.objEnv.createEpisode(this.objBest);
+    this.objEpisodeIsNew = true;
 
     const evaluated = this.novPopulation;
     this.novPopulation = this.novelty.step(evaluated, (g) => this.novEnv.evaluate(g));
     this.novBest = fittest(evaluated) as Network;
     this.novEpisode = this.novEnv.createEpisode(this.novBest);
+    this.novEpisodeIsNew = true;
 
     this.readout = {
       generation: objResult.generation,
@@ -274,6 +286,7 @@ class MazeSimulation implements Simulation {
       if (this.objEpisode === null || !this.objEpisode.step()) {
         this.objEpisode = this.objEnv.createEpisode(this.objBest);
         this.objEpisode.step();
+        this.objEpisodeIsNew = true;
       }
       objSnapshot = this.objEpisode.snapshot;
     }
@@ -281,10 +294,13 @@ class MazeSimulation implements Simulation {
       if (this.novEpisode === null || !this.novEpisode.step()) {
         this.novEpisode = this.novEnv.createEpisode(this.novBest);
         this.novEpisode.step();
+        this.novEpisodeIsNew = true;
       }
       novSnapshot = this.novEpisode.snapshot;
     }
-    this.view.draw(objSnapshot, novSnapshot, this.novelty.exploredBehaviours, this.objRunner.history);
+    this.view.draw(objSnapshot, novSnapshot, this.novelty.exploredBehaviours, this.objRunner.history, this.objEpisodeIsNew, this.novEpisodeIsNew);
+    this.objEpisodeIsNew = false;
+    this.novEpisodeIsNew = false;
   }
 }
 
@@ -436,7 +452,15 @@ const OPTIONS: readonly EnvironmentOption[] = [
         rng,
       );
       const view = new TrackRunnerView(stage, STAGE_WIDTH, STAGE_HEIGHT, env);
-      return new GaSimulation(10, new Runner(env, ga, 150), view, "fitness", (best) => best.toFixed(2));
+      // Approximate lap count from fitness: checkpoints dominate the score
+      // (distance contributes at most a few units), so floor(fitness /
+      // reward) / checkpoints-per-lap reads as "how many laps, roughly" —
+      // an honest, legible progress signal alongside the raw number.
+      const laps = (best: number): { label: string; value: string } => ({
+        label: "laps (approx.)",
+        value: (Math.floor(best / CHECKPOINT_REWARD) / CHECKPOINTS).toFixed(2),
+      });
+      return new GaSimulation(10, new Runner(env, ga, 150), view, "fitness", (best) => best.toFixed(2), (champion) => laps(champion.fitness));
     },
   },
   {
@@ -445,7 +469,7 @@ const OPTIONS: readonly EnvironmentOption[] = [
     plateLabel: "Plate VII — Maze",
     summary: "One corridor, two selections",
     footnote:
-      "The identical deceptive maze, run twice: objective fitness (left) rewards a near-goal dead end and stalls there; Novelty Search (right) ignores the goal entirely and threads the corridor by rewarding unvisited ground (Lehman & Stanley, 2011).",
+      "The identical deceptive maze, run twice: Novelty Search (right) ignores the goal entirely and reaches it immediately by exploration alone; Objective fitness (left) is genuinely tempted by two near-goal dead ends and has to learn its way past them — watch its fitness climb from scratch over a handful of generations (Lehman & Stanley, 2011).",
     build(stage) {
       const rngA = new Rng(SEED);
       const rngB = new Rng(SEED);
@@ -509,7 +533,20 @@ const OPTIONS: readonly EnvironmentOption[] = [
         rng,
       );
       const view = new XorView(stage, STAGE_WIDTH, STAGE_HEIGHT);
-      return new GaSimulation(2, new Runner(env, ga, 100), view, "fitness", (best) => `${best.toFixed(3)} / 4`);
+      // The raw fitness metric asymptotes (sigmoid never outputs exactly 0/1),
+      // so a genuinely correct network can still read "3.8 / 4" and look
+      // unfinished. "cases solved" is the honest signal: it flips to 4/4 the
+      // instant every case lands on the correct side of the 0.5 threshold.
+      const casesSolved = (champion: Genome): { label: string; value: string } => {
+        const net = champion as Network;
+        let solved = 0;
+        for (const { input, target } of XOR_CASES) {
+          const output = net.feedForward(input)[0] as number;
+          if ((output >= 0.5 ? 1 : 0) === target) solved++;
+        }
+        return { label: "cases solved", value: `${solved} / 4` };
+      };
+      return new GaSimulation(2, new Runner(env, ga, 100), view, "fitness", (best) => `${best.toFixed(3)} / 4`, casesSolved);
     },
   },
 ];

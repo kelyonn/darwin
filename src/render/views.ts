@@ -313,6 +313,9 @@ export class TrackRunnerView implements EnvironmentView {
   private episode: LiveTrackEpisode | null = null;
   private champion: Network | null = null;
   private readonly history: PopulationStats[] = [];
+  /** Fading trajectory trail — cleared on every new episode so a crash/restart
+   * never draws a line connecting the old lap to the new one. */
+  private trail: { x: number; y: number }[] = [];
 
   constructor(
     private readonly ctx: CanvasRenderingContext2D,
@@ -324,6 +327,7 @@ export class TrackRunnerView implements EnvironmentView {
   onGeneration(result: GenerationResult): void {
     this.champion = result.best as Network;
     this.episode = this.environment.createEpisode(this.champion);
+    this.trail = [];
     this.history.push(result.stats);
     if (this.history.length > 400) this.history.shift();
   }
@@ -333,6 +337,7 @@ export class TrackRunnerView implements EnvironmentView {
       if (this.episode === null || !this.episode.step()) {
         this.episode = this.environment.createEpisode(this.champion);
         this.episode.step();
+        this.trail = [];
       }
     }
 
@@ -370,6 +375,12 @@ export class TrackRunnerView implements EnvironmentView {
     }
     if (this.episode !== null) {
       const snap = this.episode.snapshot;
+      this.trail.push({ x: snap.x, y: snap.y });
+      if (this.trail.length > 300) this.trail.shift();
+      this.trail.forEach((t, i) => {
+        const alpha = (i / this.trail.length) * 0.4;
+        dot(ctx, ox + t.x * side, oy + t.y * side, 1.8, `rgba(74,124,89,${alpha})`);
+      });
       inkAgent(ctx, ox + snap.x * side, oy + snap.y * side, snap.heading, MOSS);
     }
     ctx.restore();
@@ -413,7 +424,29 @@ export class XorView implements EnvironmentView {
 
     annotate(ctx, LENS_CX, LENS_CY, LENS_R, Math.PI + 0.6, "network", MOSS);
     annotate(ctx, LENS_CX, LENS_CY, LENS_R, -0.6, "truth table", AMBER);
+    this.drawCasesSolved(ctx);
     fitnessInset(ctx, this.history);
+  }
+
+  /**
+   * A prominent "cases solved n/4" badge: raw fitness asymptotes (sigmoid never
+   * outputs exactly 0/1), so a genuinely correct network can read "3.8 / 4" and
+   * look unfinished. This flips to 4/4 the instant every case is actually right.
+   */
+  private drawCasesSolved(ctx: CanvasRenderingContext2D): void {
+    let solved = 0;
+    if (this.best !== null) {
+      for (const { input, target } of XOR_CASES) {
+        const output = this.best.feedForward(input)[0] as number;
+        if ((output >= 0.5 ? 1 : 0) === target) solved++;
+      }
+    }
+    const allSolved = solved === XOR_CASES.length;
+    ctx.font = "600 13px 'JetBrains Mono', ui-monospace, monospace";
+    ctx.textAlign = "center";
+    ctx.fillStyle = allSolved ? MOSS : INK;
+    ctx.fillText(`cases solved: ${solved} / ${XOR_CASES.length}${allSolved ? "  ✓" : ""}`, LENS_CX, LENS_CY - LENS_R + 26);
+    ctx.textAlign = "left";
   }
 }
 
@@ -572,6 +605,10 @@ export class MazeDuoView {
   private readonly objCenter = { x: 400, y: 400 };
   private readonly novCenter = { x: 780, y: 400 };
   private readonly radius = 165;
+  /** Fading trajectory trails, one per lens — cleared whenever that lens starts
+   * a new episode so a restart never draws a line back from the old attempt. */
+  private objTrail: { x: number; y: number }[] = [];
+  private novTrail: { x: number; y: number }[] = [];
 
   constructor(
     private readonly ctx: CanvasRenderingContext2D,
@@ -585,13 +622,26 @@ export class MazeDuoView {
     novSnapshot: MazeSnapshot | null,
     novArchive: readonly (readonly number[])[],
     objHistory: readonly PopulationStats[],
+    objEpisodeIsNew: boolean,
+    novEpisodeIsNew: boolean,
   ): void {
     const { ctx } = this;
     clearPlate(ctx, this.width, this.height);
     const { grid, dimensions, goal } = this.environment;
 
-    this.drawMazeLens(this.objCenter, grid, dimensions, goal, objSnapshot, MOSS, null, objSnapshot?.solved ?? false);
-    this.drawMazeLens(this.novCenter, grid, dimensions, goal, novSnapshot, AMBER, novArchive, novSnapshot?.solved ?? false);
+    if (objEpisodeIsNew) this.objTrail = [];
+    if (novEpisodeIsNew) this.novTrail = [];
+    if (objSnapshot !== null) {
+      this.objTrail.push({ x: objSnapshot.x, y: objSnapshot.y });
+      if (this.objTrail.length > 300) this.objTrail.shift();
+    }
+    if (novSnapshot !== null) {
+      this.novTrail.push({ x: novSnapshot.x, y: novSnapshot.y });
+      if (this.novTrail.length > 300) this.novTrail.shift();
+    }
+
+    this.drawMazeLens(this.objCenter, grid, dimensions, goal, objSnapshot, MOSS, null, objSnapshot?.solved ?? false, this.objTrail);
+    this.drawMazeLens(this.novCenter, grid, dimensions, goal, novSnapshot, AMBER, novArchive, novSnapshot?.solved ?? false, this.novTrail);
 
     ctx.fillStyle = INK;
     ctx.font = "600 11px 'JetBrains Mono', ui-monospace, monospace";
@@ -621,6 +671,7 @@ export class MazeDuoView {
     agentColor: string,
     scatter: readonly (readonly number[])[] | null,
     solved: boolean,
+    trail: readonly { x: number; y: number }[],
   ): void {
     const { ctx } = this;
     const { x: cx, y: cy } = center;
@@ -660,6 +711,10 @@ export class MazeDuoView {
         dot(ctx, ox + bx * side, oy + by * side, 2, `rgba(201,161,90,${0.15 + (i / scatter.length) * 0.4})`);
       });
     }
+    trail.forEach((t, i) => {
+      const alpha = (i / trail.length) * 0.45;
+      dot(ctx, ox + (t.x / dims.cols) * side, oy + (t.y / dims.rows) * side, 1.8, `rgba(28,27,23,${alpha})`);
+    });
     if (snapshot !== null) {
       const px = ox + (snapshot.x / dims.cols) * side;
       const py = oy + (snapshot.y / dims.rows) * side;
