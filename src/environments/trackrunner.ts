@@ -17,8 +17,8 @@ const MAX_SPEED = 0.01;
 const MAX_TURN = 0.18;
 const EPISODE_STEPS = 500;
 /** Ring divided into this many checkpoints; each is worth `CHECKPOINT_REWARD`. */
-const CHECKPOINTS = 16;
-const CHECKPOINT_REWARD = 5;
+export const CHECKPOINTS = 16;
+export const CHECKPOINT_REWARD = 5;
 const SECTOR_ANGLE = (2 * Math.PI) / CHECKPOINTS;
 const MID_RADIUS = (INNER_RADIUS + OUTER_RADIUS) / 2;
 const HALF_WIDTH = (OUTER_RADIUS - INNER_RADIUS) / 2;
