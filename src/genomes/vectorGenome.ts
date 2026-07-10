@@ -6,7 +6,9 @@ import type { Rng } from "../core/rng.js";
  * the genome *is* the coordinates of a point being scored. Uses no neural
  * network.
  *
- * - `mutate`: adds independent Gaussian noise to each component.
+ * - `mutate`: adds independent Gaussian noise to each component, with the step
+ *   size scaled by `rate` — so a cooling schedule (PRD §7) anneals the search
+ *   radius from coarse exploration down to fine refinement onto the optimum.
  * - `crossover`: component-wise arithmetic blend of two parents.
  *
  * Immutable except for `fitness`; operators return new instances.
@@ -55,8 +57,10 @@ export class VectorGenome implements Genome {
   }
 
   mutate(rate: number): VectorGenome {
+    // Every coordinate moves, by a radius that shrinks with `rate`: coarse jumps
+    // early (escape local optima), tiny steps late (settle onto the optimum).
     const mutated = this.values.map((value) =>
-      this.rng.next() < rate ? this.clamp(value + this.rng.gaussian(0, this.stdDev)) : value,
+      this.clamp(value + this.rng.gaussian(0, this.stdDev * rate)),
     );
     return new VectorGenome(mutated, this.stdDev, this.bounds, this.rng);
   }

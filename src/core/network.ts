@@ -53,7 +53,10 @@ function sigmoid(x: number): number {
  * floats and never knows what they represent (PRD §0). The Environment assigns
  * meaning.
  *
- * - `mutate`: perturbs each parameter by Gaussian noise with probability `rate`.
+ * - `mutate`: perturbs parameters by Gaussian noise. `rate` acts as a
+ *   temperature controlling *both* how many weights change (probability) and how
+ *   far (magnitude), so a cooling schedule (PRD §7) refines a good controller
+ *   with progressively gentler, sparser tweaks instead of large disruptive jolts.
  * - `crossover`: per-parameter uniform mix of two parents' weights.
  */
 export class Network implements Genome {
@@ -165,7 +168,7 @@ export class Network implements Genome {
     const mutated = new Float32Array(this.weights);
     for (let i = 0; i < mutated.length; i++) {
       if (this.rng.next() < rate) {
-        mutated[i] = (mutated[i] as number) + this.rng.gaussian(0, this.config.mutationStdDev);
+        mutated[i] = (mutated[i] as number) + this.rng.gaussian(0, this.config.mutationStdDev * rate);
       }
     }
     return new Network(this.config, mutated, this.rng);
