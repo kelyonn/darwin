@@ -46,8 +46,11 @@
         left: 0;
         transform-origin: top left;
       }
+      /* No fixed width here (unlike .plate-frame/.footnote, which are pinned
+         to the 1180px design): the tab bar can outgrow 1180px as more
+         environments are added, so .page shrink-wraps to whichever is wider —
+         the header row or the 1180px plate — instead of clipping tabs. */
       .page {
-        width: 1228px;
         display: flex;
         flex-direction: column;
         align-items: center;
@@ -55,10 +58,11 @@
         box-sizing: border-box;
       }
       .header-row {
-        width: 100%;
+        min-width: 1180px;
         display: flex;
         align-items: baseline;
         justify-content: space-between;
+        gap: 40px;
         margin-bottom: 22px;
       }
       .title {
@@ -74,6 +78,7 @@
       }
       .tabs {
         display: flex;
+        flex-shrink: 0;
         gap: 0;
         border: 1px solid rgba(28, 27, 23, 0.35);
         border-radius: 2px;
