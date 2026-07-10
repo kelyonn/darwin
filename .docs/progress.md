@@ -49,6 +49,18 @@ honestly labelled to reflect this rather than overclaiming the classic Lehman & 
 known-issues.md. The environment still correctly demonstrates the *architectural* point (swap the
 search paradigm, zero core changes) even where the *behavioural* contrast is weaker than textbook.
 
+## Population-average plateau fix
+Several GA environments (Landscape, cart-pole, track runner, maze-objective, TSP) looked
+"stuck" — the champion was fine but the population never seemed to visibly improve. Root
+cause, found by headless measurement (not assumed): `eliteCount` at ~1% of `populationSize`
+meant almost no crossover ever involved a genuinely good parent, pinning the population
+*average* regardless of mutation tuning. Raised `eliteCount` to ~5–8% across the affected
+environments — measured 10× (Landscape) and 6× (cart-pole) average-fitness improvement, `best`
+unaffected. A mutation-annealing schedule (`core/breeding.ts` `annealedRate`,
+`mutationDecay`/`minMutationRate`) was also built and shipped as a secondary refinement — real
+and PRD-aligned, but *not* the actual fix for this symptom; see ADR-008 and known-issues.md for
+the full measured trace and the correction of the original hypothesis.
+
 ## Next
 Host the static bundle (highest real-world value) and/or M11 (`headless/runExperiment.ts`) to
 enable the batch research runs described in RESEARCH.md §7.

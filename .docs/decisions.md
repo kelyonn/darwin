@@ -104,3 +104,60 @@ runner, predator-prey) never touch `behaviour` and it stays absent, exactly as
 before this milestone. Divergent-search environments (maze, gait) set it during
 `evaluate`. This is a narrow but easy-to-repeat mistake — any future optional field
 on `Genome` should follow the same pattern.
+
+## ADR-008 — Mutation annealing + raised elite fraction, in that order of investigation
+**Context.** Several environments appeared "stuck" — visibly not improving after
+early generations, even though the champion (`best`) was fine. The initial
+hypothesis (planned and partly implemented before this ADR) was that mutation
+intensity never anneals, so the population is perpetually kicked out of good
+regions before it can refine. That mechanism was built:
+`BreedingConfig.mutationDecay`/`minMutationRate`, applied in `GenerationalGA` and
+`CoevolutionDriver` via `breeding.annealedRate`, with `VectorGenome.mutate` and
+`Network.mutate` changed so perturbation *magnitude* scales with `rate` (previously
+only `Network` gated perturbation by *probability*; `VectorGenome` gated by
+probability too, with the *step size* fixed at construction regardless of `rate`).
+
+**What measurement actually found (`.docs/known-issues.md` has the full numbers).**
+Headless traces (`computeStats` over generations, several seeds) showed the
+population's *average* fitness reaches a hard plateau within ~20 generations and
+never moves again — but annealing the mutation rate all the way down to its floor
+changed that plateau by less than 1%, on both Landscape (vector genome, blend
+crossover) and cart-pole (network genome, uniform-mix crossover). Tournament size
+(5 → 15 → 25) also made no measurable difference. Isolating crossover entirely
+(mutation-only breeding) still plateaued, just at a different level. The one lever
+that moved the plateau, cleanly and monotonically, was **`eliteCount` as a
+fraction of `populationSize`**: raising it from 2/300 (0.7%) to 20/300 (~7%) raised
+Landscape's population-average fitness 10× (0.0067 → 0.0667); the equivalent
+change on cart-pole (2/150 → 12/150) raised its average 6× (24 → 144 frames of
+1800). `best` never regressed in any configuration (elitism is unaffected).
+
+**Why:** with `eliteCount` a tiny fraction of the population, only ~2 genomes are
+ever actually good, so a tournament of 5 out of 300 has roughly a 3% chance of
+drawing one, and thus almost every crossover blends two mediocre parents. On a
+deceptive function this doesn't average toward the optimum — it produces another
+mediocre point regardless of how large or small the subsequent mutation is. This
+is a property of **tournament + elitism breeding structure**, not of any one
+genome's mutation operator — it reproduced identically on both a continuous vector
+genome and a neural-network genome with an unrelated crossover operator.
+
+**Decision.** Keep the annealing mechanism (it is sound, PRD-aligned, harmless
+when unused, and does provide late-stage refinement once the population can
+actually reach good regions), but treat it as secondary. The primary fix applied
+in `main.ts` is **raising `eliteCount` to roughly 5–8% of `populationSize`** on
+every GA-driven environment where this was measured to matter: Landscape, TSP
+(unmeasured directly but same breeding structure — applied by inference, not
+fabrication, and flagged as such), cart-pole, track runner, and the maze's
+objective side. Left unchanged: Weasel (already solves exactly), the maze's
+novelty side (higher elitism would fight its exploration goal — the archive
+already preserves diversity), predator–prey (already at a proportionally
+reasonable 2/40 ≈ 5%, and over-cooling an arms race is its own failure mode, see
+RESEARCH.md §4), and MAP-Elites (a fundamentally different, archive-based
+mechanism with no tournament/elitism at all).
+
+**Consequences.** This corrects the plan's original hypothesis rather than
+quietly discarding it — annealing shipped anyway because it is real, tested
+infrastructure with a legitimate PRD basis (§7), but the commit history and this
+ADR are explicit that it was *not* the fix for the reported symptom. TSP's
+`eliteCount` bump is the one change in this set not individually re-verified by a
+headless trace (time budget) — if TSP still looks flat, verify it the same way
+before assuming the fix transfers.

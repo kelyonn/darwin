@@ -3,6 +3,31 @@
 Open problems and sharp edges. None are currently blocking; all are documented so a
 future session does not rediscover them.
 
+## Population-average plateau (fixed — see ADR-008)
+- **Symptom:** several GA environments looked "stuck" after early generations — the
+  champion (`best`) was fine, but the population as a whole never seemed to visibly
+  improve; watching the swarm gave the impression evolution had stopped.
+- **Root cause, measured:** with `eliteCount` at ~0.7–1.3% of `populationSize` (2 out
+  of 150–300), the population-average fitness hits a hard plateau within ~20
+  generations and does not move for hundreds more, on *both* a vector genome
+  (Landscape, blend crossover) and a network genome (cart-pole, uniform-mix
+  crossover). Mutation-rate annealing and tournament-size changes (5/15/25) made
+  <1% difference to the plateau; isolating crossover entirely still plateaued.
+  Raising `eliteCount` to ~5–8% of the population raised the average 10× (Landscape)
+  and 6× (cart-pole) — see ADR-008 for the full trace.
+- **Fix applied:** `eliteCount` raised on Landscape, TSP, cart-pole, track runner,
+  and the maze's objective side, in `main.ts`. A mutation-annealing schedule
+  (`mutationDecay`/`minMutationRate`) was also built and applied as a secondary,
+  complementary refinement — it is real and PRD-aligned (§7) but was *not* the fix
+  for this symptom; do not assume mutation tuning alone will unstick a plateaued GA
+  environment in this codebase again without measuring first.
+- **Not touched:** Weasel (already solves exactly), maze's novelty side and
+  predator–prey (elitism there already proportionally reasonable / would fight the
+  environment's actual goal), MAP-Elites (no elitism mechanism at all).
+- **Open:** TSP's `eliteCount` bump was applied by inference (same breeding
+  structure as Landscape/cart-pole) rather than individually re-measured — verify
+  headlessly the same way if it still looks flat.
+
 ## Behavioural / tuning
 - **Predator–prey balance is hand-tuned, not adaptive.** Speeds and turn rates (the
   life–dinner asymmetry) were set empirically to keep capture rate ~25–45%. A different

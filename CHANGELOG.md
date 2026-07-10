@@ -6,6 +6,25 @@ unreleased, so entries are grouped by milestone rather than version.
 
 ## [Unreleased]
 
+### Fixed — population-average plateau across GA environments
+- Root cause (measured headlessly, not assumed): `eliteCount` at ~1% of
+  `populationSize` meant crossover almost never involved a genuinely good parent,
+  so population-*average* fitness plateaued hard within ~20 generations regardless
+  of mutation tuning, on both vector and network genomes. Raised `eliteCount` to
+  ~5–8% on Landscape, TSP, cart-pole, track runner, and the maze's objective side
+  — measured 10× (Landscape) and 6× (cart-pole) average-fitness improvement, with
+  `best` unaffected (elitism guarantee preserved).
+- `core/breeding.ts`: `annealedRate()` and `BreedingConfig.mutationDecay`/
+  `minMutationRate` — a geometric cooling schedule for mutation intensity, applied
+  in `GenerationalGA` and `CoevolutionDriver`. Built as the initial fix hypothesis;
+  shipped as a real, PRD-aligned (§7) secondary refinement, but measurement showed
+  it was *not* the actual cause of the plateau — see `.docs/decisions.md` ADR-008.
+- `genomes/vectorGenome.ts` / `core/network.ts`: `mutate(rate)` now scales
+  perturbation *magnitude* by `rate` (previously only frequency, or a fixed step
+  size), so the annealing schedule has something to anneal.
+- `test/breeding.test.ts`: annealing determinism and backward-compatibility
+  (`mutationDecay` absent/`1` reproduces the unscheduled run byte-for-byte).
+
 ### Added — M6 track runner
 - `environments/trackrunner.ts`: ring track, five-ray sensors, progress-led fitness
   (`checkpoints·K + distance`), reusing the episodic pattern established for cart-pole.
