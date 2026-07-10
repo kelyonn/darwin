@@ -20,14 +20,20 @@ const EPISODE_STEPS = 500;
 const CHECKPOINTS = 16;
 const CHECKPOINT_REWARD = 5;
 const SECTOR_ANGLE = (2 * Math.PI) / CHECKPOINTS;
+const MID_RADIUS = (INNER_RADIUS + OUTER_RADIUS) / 2;
+const HALF_WIDTH = (OUTER_RADIUS - INNER_RADIUS) / 2;
 
 /** Mutable state of the car during an episode. */
 interface CarState {
   x: number;
   y: number;
   heading: number;
-  /** Signed angular travel around the centre, accumulated across ticks. */
-  angleAccumulated: number;
+  /**
+   * Angular travel around the centre, accumulated across ticks and weighted by
+   * how far from the inner wall the car was at each tick (see `fitnessOf`).
+   * Not a raw angle — the weighting is what makes this fair.
+   */
+  weightedAngle: number;
   distance: number;
   previousAngle: number;
 }
@@ -56,6 +62,16 @@ export interface LiveTrackEpisode {
  * `checkpoints · K + distance_travelled`, where a large per-checkpoint reward
  * dominates raw distance so the car is driven to make real progress around the
  * ring rather than idle or wall-hug. The car dies on wall contact.
+ *
+ * Checkpoint progress is *radius-weighted*: naive angle tracking is exploitable
+ * — a smaller radius means a smaller circumference, so hugging the inner wall
+ * completes more sectors per unit of the fixed distance/time budget than
+ * genuinely driving the track (measured: the population reliably converges on
+ * exactly this exploit and plateaus at the resulting fitness ceiling). A
+ * *monotonic* weight (reward growing with radius) only moves the exploit to the
+ * outer wall instead — also measured, not assumed. The weight below peaks at
+ * the track's midline and falls off toward both walls, so there is no boundary
+ * left to hug and the rewarded strategy is a genuine lap along the centre line.
  */
 export class TrackRunnerEnvironment implements Environment {
   private readonly networkConfig: NetworkConfig;
@@ -130,7 +146,7 @@ function startingCar(): CarState {
     x: CENTER + radius,
     y: CENTER,
     heading: -Math.PI / 2,
-    angleAccumulated: 0,
+    weightedAngle: 0,
     distance: 0,
     previousAngle: 0,
   };
@@ -149,7 +165,13 @@ function advanceCar(network: Network, state: CarState): boolean {
   state.distance += speed;
 
   const angle = Math.atan2(state.y - CENTER, state.x - CENTER);
-  state.angleAccumulated += normalizeAngle(angle - state.previousAngle);
+  const radiusNow = Math.hypot(state.x - CENTER, state.y - CENTER);
+  // Tent-shaped weight: 1 at the midline, 0 at either wall. A monotonic weight
+  // (just distance from one wall) only relocates the exploit to the opposite
+  // wall — measured, not assumed (see the class doc above). Peaking at the
+  // midline and falling off toward both boundaries leaves no wall worth hugging.
+  const radiusFactor = clamp01(1 - Math.abs(radiusNow - MID_RADIUS) / HALF_WIDTH);
+  state.weightedAngle += radiusFactor * normalizeAngle(angle - state.previousAngle);
   state.previousAngle = angle;
 
   return onTrack(state.x, state.y);
@@ -175,7 +197,7 @@ function senseWalls(state: CarState): number[] {
 }
 
 function fitnessOf(state: CarState): number {
-  const checkpoints = Math.floor(Math.abs(state.angleAccumulated) / SECTOR_ANGLE);
+  const checkpoints = Math.floor(Math.abs(state.weightedAngle) / SECTOR_ANGLE);
   return checkpoints * CHECKPOINT_REWARD + state.distance;
 }
 
@@ -186,6 +208,10 @@ function onTrack(x: number, y: number): boolean {
 
 function clampUnit(value: number): number {
   return Math.min(1, Math.max(-1, value));
+}
+
+function clamp01(value: number): number {
+  return Math.min(1, Math.max(0, value));
 }
 
 function normalizeAngle(angle: number): number {
