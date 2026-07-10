@@ -6,6 +6,35 @@ unreleased, so entries are grouped by milestone rather than version.
 
 ## [Unreleased]
 
+### Fixed — track runner reward-hacking exploit
+- Root cause (measured, replaying the champion and recording its trajectory):
+  fitness counted raw angular sectors crossed, so hugging the track's inner wall
+  (smaller circumference) completed more sectors per unit of the fixed
+  distance/time budget than genuinely driving the track. The population reliably
+  converged on exactly this exploit and plateaued at its theoretical ceiling
+  (315), which looked identical to the eliteCount plateau but had a different
+  cause.
+- A first fix (monotonic radius weighting) was tried, measured, and rejected: it
+  only relocated the exploit to the *outer* wall (new ceiling 150). `environments/trackrunner.ts`
+  now weights angular progress by a tent function peaking at the track's midline
+  and falling to zero at both walls — verified the champion drives centred
+  (radius 0.3099–0.3101 against a true midline of 0.31), with fitness settling at
+  210, matching the independently-computed theoretical maximum for a genuine lap.
+- `test/trackrunner.test.ts`: a regression test asserting the trained champion's
+  average radius stays clear of both walls — the test that would have caught
+  this originally.
+- See `.docs/decisions.md` ADR-009 for the full measured trace, including the
+  rejected first attempt.
+
+### Verified — maze and gait genuinely complete their tasks
+- In response to a report that environments "aren't finishing," every GA/search
+  environment was individually re-checked rather than assumed correct because
+  tests pass. Maze's objective champion reaches within 0.45 units of the goal
+  (inside the 0.6 solve radius). Gait's best MAP-Elites genome sustains 27+ units
+  of real hopping locomotion (a consistent ~46% stance duty factor) when
+  replayed beyond its evaluation window — genuine gait, not degenerate flopping.
+  No changes needed; findings recorded in `.docs/known-issues.md`.
+
 ### Fixed — population-average plateau across GA environments
 - Root cause (measured headlessly, not assumed): `eliteCount` at ~1% of
   `populationSize` meant crossover almost never involved a genuinely good parent,

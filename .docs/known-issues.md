@@ -3,6 +3,34 @@
 Open problems and sharp edges. None are currently blocking; all are documented so a
 future session does not rediscover them.
 
+## Track runner reward-hacking exploit (fixed — see ADR-009)
+- **Symptom:** fitness plateaued hard at exactly 315.00 within ~20 generations and
+  never moved again, even with the eliteCount fix already applied. Unlike the
+  population-average plateau below, this was the *champion itself* capped, not
+  just the average.
+- **Root cause, measured:** 315 is precisely the theoretical maximum achievable by
+  hugging the track's *inner* wall at full throttle for the whole episode (verified
+  by replaying the champion and recording its radius: avg 0.2047, essentially
+  touching `innerRadius = 0.2`). The bug: fitness counted raw angular sectors
+  crossed, and a smaller radius means a smaller circumference, so hugging the
+  inner wall completes more sectors per unit of the fixed distance/time budget
+  than genuinely driving the track — classic reward hacking (PRD §6).
+- **First attempted fix (measured, and wrong):** weighting angular progress
+  *monotonically* by distance from the inner wall just relocated the exploit to
+  the *outer* wall (verified: champion radius shifted to avg 0.4035, against
+  `outerRadius = 0.42`, fitness capped at a new ceiling of 150). Any monotonic
+  radius weight pushes the optimum to one boundary or the other — proven
+  algebraically (the reward-rate function `(r−inner)/r` is monotonic in `r`) and
+  confirmed empirically before being discarded.
+- **Actual fix:** a *tent*-shaped weight peaking at the track's midline and
+  falling to zero at both walls (`clamp01(1 − |r − midRadius| / halfWidth)`).
+  Verified: champion radius locks to avg 0.3101 against a true midline of 0.31
+  (min/max 0.3099/0.3101 — essentially exact), fitness settles at 210, which
+  matches the computed theoretical maximum for a perfect centred lap exactly.
+- **Regression test:** `trackrunner.test.ts` asserts the champion's average
+  radius after a real training run stays within 15% of the track width from
+  either wall. This is the test that would have caught the original bug.
+
 ## Population-average plateau (fixed — see ADR-008)
 - **Symptom:** several GA environments looked "stuck" after early generations — the
   champion (`best`) was fine, but the population as a whole never seemed to visibly
@@ -27,6 +55,23 @@ future session does not rediscover them.
 - **Open:** TSP's `eliteCount` bump was applied by inference (same breeding
   structure as Landscape/cart-pole) rather than individually re-measured — verify
   headlessly the same way if it still looks flat.
+
+## "Environments aren't finishing their tasks" — verification pass
+After the two fixes above, all remaining GA/search environments were checked
+individually (not assumed fine because tests pass) in response to a report that
+several plates looked stuck:
+- **Landscape, cart-pole:** confirmed fixed by the eliteCount change above.
+- **Track runner:** the reward-hacking exploit above, now fixed.
+- **Maze (objective side):** confirmed genuinely solving — champion's final
+  position measured at 0.45 units from the goal centre, inside the 0.6 solve
+  radius, at the fitness value (~0.69) already on record. Not a bug; the
+  known-good caveat is the *behavioural contrast with novelty* being weaker than
+  textbook (separate section below), not that it fails to solve.
+- **Gait / MAP-Elites:** confirmed genuine locomotion, not degenerate flopping.
+  The archive fills with real fitness variation (0 to ~9.2 within the 400-tick
+  evaluation window); replaying the best genome for longer than its evaluation
+  window shows it travels 27+ units with a consistent stance/flight rhythm
+  (~46% duty factor over 1000 ticks) — a real hopping gait.
 
 ## Behavioural / tuning
 - **Predator–prey balance is hand-tuned, not adaptive.** Speeds and turn rates (the

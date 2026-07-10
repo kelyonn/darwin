@@ -161,3 +161,36 @@ ADR are explicit that it was *not* the fix for the reported symptom. TSP's
 `eliteCount` bump is the one change in this set not individually re-verified by a
 headless trace (time budget) — if TSP still looks flat, verify it the same way
 before assuming the fix transfers.
+
+## ADR-009 — Track runner's checkpoint reward must be radius-weighted with a tent function
+**Context.** After ADR-008's eliteCount fix, track runner's fitness *still*
+plateaued hard — but at exactly 315.00, unlike Landscape/cart-pole where only the
+*average* was capped. Replaying the champion (`env.createEpisode`) and recording
+its radius each tick showed it hugging the inner wall (avg radius 0.2047 against
+`innerRadius = 0.2`). The cause: fitness counted raw angular sectors crossed
+(`floor(angleAccumulated / SECTOR_ANGLE) * REWARD`), and a smaller radius means a
+smaller circumference, so hugging the inner wall completes more sectors per unit
+of the fixed distance/time budget than genuinely driving the track — reward
+hacking (PRD §6), not a search-difficulty problem.
+**First attempt, tried and measured wrong.** Weighting each tick's angular
+progress by `(radius − inner) / (outer − inner)` (0 at the inner wall, 1 at the
+outer wall) just moved the exploit to the *outer* wall — measured: champion
+radius shifted to avg 0.4035, fitness capped at a new ceiling of 150. This is
+provable in general, not just empirically: for any monotonic weight `w(r)`, the
+reward rate `w(r) · (v/r)` is maximised at one boundary of `r` because a monotonic
+function has no interior extremum on a closed interval.
+**Decision.** Weight each tick's angular progress by a *tent* function peaking at
+the track's midline and falling to zero at both walls:
+`clamp01(1 − |r − midRadius| / halfWidth)`. This has an interior maximum, so
+there is no boundary left to hug.
+**Consequences.** Verified: champion radius locks to avg 0.3101 against a true
+midline of 0.31 (min/max 0.3099/0.3101), and the resulting fitness ceiling (210)
+matches the independently-computed theoretical maximum for a perfect centred lap
+exactly. A regression test (`trackrunner.test.ts`) asserts the trained champion's
+average radius stays within 15% of the track width from either wall — this is
+the test that would have caught the original bug, and the fix is only trustworthy
+because both the naive and the working version were measured, not assumed.
+General lesson for this codebase: a population "plateauing at a suspiciously
+round-looking maximum" is itself a signal to check whether that number is the
+*intended* optimum or an *exploitable* one — replay the champion and inspect its
+actual behaviour, don't just look at the fitness curve.

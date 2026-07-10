@@ -12,17 +12,32 @@ something running.
 | M4 | `matrix` + `network` + XOR | ✅ done | matrix/network unit-tested in isolation; XOR solved + all 4 cases classified |
 | M5 | Cart-pole (episodic + sim/render split) | ✅ done | balances varied starts, improves over generations, reproducible |
 | M7 | Observability: canvas views per env, selector, fitness chart, `Runner` | ✅ done | all 4 environments render; verified on screen |
-| M6 | Track runner (raycast sensors) | ✅ done | ring track, 5-ray sensors, `checkpoints·K + distance`; verified climbing on screen (best 315 by gen 22) |
+| M6 | Track runner (raycast sensors) | ✅ done | ring track, 5-ray sensors, radius-weighted `checkpoints·K + distance` (see ADR-009 — the naive version was reward-hackable); champion verified centred on the track midline, fitness ceiling ~210 matches the computed theoretical max for a genuine lap |
 | M8 | Performance pass (typed-array reuse, worker, `kernel/cpu.ts`) | ◐ partial | Float32Array weights already in `network.ts`/`matrix.ts`; buffer pooling + worker + measured 60 FPS numbers remain |
 | M9 | Predator–prey + `search/coevolution.ts` (Hall of Fame, sampling, sharing) + CIAO plot + browser view | ✅ done | `CoevolutionDriver` + `predatorPrey.ts`; 11 tests. Wired as the default landing view via a `Simulation` adapter in `main.ts`; live arena + CIAO heatmap + capture-rate pulse. Verified on screen: capture rate oscillates ~25–45% (engaged arms race) |
 | M10 | Maze + `search/novelty.ts`; Gait + `search/mapElites.ts` | ✅ done | both wired and verified on screen (see below) |
 | M11 | `headless/runExperiment.ts` — batch runner | ⬜ | research substrate (RESEARCH.md §7) |
 | M12 | Scale: `kernel/gpu.ts` (WebGPU) + `kernel/wasm.ts`; three-backend benchmark | ⬜ | large, separate effort; measure — never fabricate (PRD §8) |
 
-Test status: **82 passing** across 16 files. Typecheck clean under full strict mode. Suite runs in ~10s.
+Test status: **88 passing** across 17 files. Typecheck clean under full strict mode.
 
 ## Current focus
 M6, M9, and M10 are all **complete and demoable**.
+
+**Track runner reward-hacking fix:** raw angular-sector checkpoints let the population converge
+on hugging the inner wall (smaller circumference = cheaper checkpoints), plateauing at a fitness
+ceiling that turned out to be exactly the theoretical max for that exploit (315), not genuine
+driving skill. A naive monotonic radius weight just relocated the exploit to the outer wall
+(measured, then discarded). The fix is a tent-shaped weight peaking at the track's midline —
+verified the champion now drives centred (radius 0.3099–0.3101 against a true midline of 0.31),
+with a regression test locking this in. Full trace in ADR-009 / known-issues.md.
+
+**Verification pass:** in response to a report that several environments "aren't finishing their
+tasks," every GA/search-driven environment was individually re-checked (not assumed fine because
+tests pass). Landscape and cart-pole were the earlier eliteCount fix; track runner is the exploit
+above; maze and gait were both confirmed genuinely working (maze's champion reaches within 0.45
+units of the goal; gait's best genome sustains 27+ units of real hopping locomotion when replayed
+beyond its evaluation window). See known-issues.md for the full per-environment findings.
 
 **M9** (predator–prey co-evolution): a distinct `CoevolutionDriver` drives two populations with
 shared-sampling opponents, a Hall of Fame, and competitive fitness sharing (Rosin & Belew), plus a
