@@ -330,7 +330,10 @@ const OPTIONS: readonly EnvironmentOption[] = [
       const populationSize = 40;
       const driver = new CoevolutionDriver(
         env.compete,
-        { populationSize, eliteCount: 2, tournamentSize: 4, mutationRate: 0.2, opponentSampleSize: 4, hallOfFameSize: 5 },
+        // rate ~0.45 keeps total mutation energy near the previously-tuned balance
+        // now that network magnitude scales with rate; a very gentle decay with a
+        // high floor keeps the arms race lively without over-cooling it.
+        { populationSize, eliteCount: 2, tournamentSize: 4, mutationRate: 0.45, mutationDecay: 0.999, minMutationRate: 0.12, opponentSampleSize: 4, hallOfFameSize: 5 },
         rng,
       );
       const state: CoevolutionState = { predators: env.newPredators(populationSize), prey: env.newPrey(populationSize) };
@@ -362,7 +365,17 @@ const OPTIONS: readonly EnvironmentOption[] = [
     build(stage) {
       const rng = new Rng(SEED);
       const env = new LandscapeEnvironment(2, rng);
-      const ga = new GenerationalGA({ populationSize: 300, eliteCount: 2, tournamentSize: 5, mutationRate: 0.1 }, rng);
+      // rate is now the mutation *radius* (× stdDev). Cool it from coarse (hop
+      // between Rastrigin optima) to fine (settle onto the origin). eliteCount
+      // raised to ~7% of the population: measured (see .docs/decisions.md) that
+      // with only 2 elites out of 300, blend crossover on this deceptive surface
+      // dilutes elite genes so thoroughly that population *average* fitness
+      // pins near-zero forever regardless of mutation tuning — raising the
+      // elite fraction is what actually lets the swarm visibly converge.
+      const ga = new GenerationalGA(
+        { populationSize: 300, eliteCount: 20, tournamentSize: 5, mutationRate: 1.0, mutationDecay: 0.985, minMutationRate: 0.02 },
+        rng,
+      );
       const view = new LandscapeView(stage, STAGE_WIDTH, STAGE_HEIGHT);
       return new GaSimulation(1, new Runner(env, ga, 300), view, "fitness", (best) => best.toFixed(3));
     },
@@ -377,7 +390,11 @@ const OPTIONS: readonly EnvironmentOption[] = [
     build(stage) {
       const rng = new Rng(SEED);
       const env = new TspEnvironment(20, rng);
-      const ga = new GenerationalGA({ populationSize: 300, eliteCount: 2, tournamentSize: 5, mutationRate: 0.1 }, rng);
+      // Same elite-fraction fix as Landscape: the low-eliteCount plateau is a
+      // property of tournament+elitism breeding generally, not this genome's
+      // mutation specifically (order-crossover isn't touched — swap mutation
+      // semantics are unaffected by the annealing mechanism).
+      const ga = new GenerationalGA({ populationSize: 300, eliteCount: 20, tournamentSize: 5, mutationRate: 0.1 }, rng);
       const view = new TspView(stage, STAGE_WIDTH, STAGE_HEIGHT, env);
       return new GaSimulation(1, new Runner(env, ga, 300), view, "route distance", (best) => (1 / best - 1).toFixed(3));
     },
@@ -392,7 +409,14 @@ const OPTIONS: readonly EnvironmentOption[] = [
     build(stage) {
       const rng = new Rng(SEED);
       const env = new CartPoleEnvironment(600, 6, 3, rng);
-      const ga = new GenerationalGA({ populationSize: 150, eliteCount: 2, tournamentSize: 5, mutationRate: 0.2 }, rng);
+      // eliteCount raised to ~8%: same elite-fraction fix as Landscape,
+      // measured to move population average from ~24 to ~144 frames (of 1800
+      // max) at generation 60 — the swarm now visibly improves, not just the
+      // single champion behind an unmoving average.
+      const ga = new GenerationalGA(
+        { populationSize: 150, eliteCount: 12, tournamentSize: 5, mutationRate: 0.5, mutationDecay: 0.99, minMutationRate: 0.03 },
+        rng,
+      );
       const view = new CartPoleView(stage, STAGE_WIDTH, STAGE_HEIGHT, env);
       return new GaSimulation(12, new Runner(env, ga, 150), view, "frames upright", (best) => `${best.toFixed(0)} / ${env.maxFitness}`);
     },
@@ -407,7 +431,10 @@ const OPTIONS: readonly EnvironmentOption[] = [
     build(stage) {
       const rng = new Rng(SEED);
       const env = new TrackRunnerEnvironment(6, rng);
-      const ga = new GenerationalGA({ populationSize: 150, eliteCount: 2, tournamentSize: 5, mutationRate: 0.2 }, rng);
+      const ga = new GenerationalGA(
+        { populationSize: 150, eliteCount: 12, tournamentSize: 5, mutationRate: 0.5, mutationDecay: 0.99, minMutationRate: 0.03 },
+        rng,
+      );
       const view = new TrackRunnerView(stage, STAGE_WIDTH, STAGE_HEIGHT, env);
       return new GaSimulation(10, new Runner(env, ga, 150), view, "fitness", (best) => best.toFixed(2));
     },
@@ -424,9 +451,16 @@ const OPTIONS: readonly EnvironmentOption[] = [
       const rngB = new Rng(SEED);
       const objEnv = new MazeEnvironment(6, rngA);
       const novEnv = new MazeEnvironment(6, rngB);
-      const baseConfig = { populationSize: 150, eliteCount: 2, tournamentSize: 5, mutationRate: 0.2 };
-      const ga = new GenerationalGA(baseConfig, rngA);
-      const novelty = new NoveltySearch({ ...baseConfig, neighbours: 8, archiveThreshold: 0.03, archiveLimit: 400 }, rngB);
+      // Objective side cools toward refinement and uses the same raised elite
+      // fraction as the other GA environments; the novelty side deliberately
+      // keeps eliteCount low and mutation constant, since its archive already
+      // preserves diversity and exploration is the whole point.
+      const objConfig = { populationSize: 150, eliteCount: 12, tournamentSize: 5, mutationRate: 0.5, mutationDecay: 0.99, minMutationRate: 0.05 };
+      const ga = new GenerationalGA(objConfig, rngA);
+      const novelty = new NoveltySearch(
+        { populationSize: 150, eliteCount: 2, tournamentSize: 5, mutationRate: 0.4, neighbours: 8, archiveThreshold: 0.03, archiveLimit: 400 },
+        rngB,
+      );
       const view = new MazeDuoView(stage, STAGE_WIDTH, STAGE_HEIGHT, objEnv);
       return new MazeSimulation(10, objEnv, novEnv, new Runner(objEnv, ga, 150), novelty, novEnv.newPopulation(150), view);
     },
@@ -450,7 +484,9 @@ const OPTIONS: readonly EnvironmentOption[] = [
           ],
           initialPopulation: 200,
           batchSize: 40,
-          mutationRate: 0.3,
+          // Raised to keep archive coverage now that network magnitude scales
+          // with rate; MAP-Elites wants a constant, exploratory temperature.
+          mutationRate: 0.5,
         },
         rng,
       );
@@ -468,7 +504,10 @@ const OPTIONS: readonly EnvironmentOption[] = [
     build(stage) {
       const rng = new Rng(SEED);
       const env = new XorEnvironment(4, rng);
-      const ga = new GenerationalGA({ populationSize: 100, eliteCount: 2, tournamentSize: 5, mutationRate: 0.15 }, rng);
+      const ga = new GenerationalGA(
+        { populationSize: 100, eliteCount: 8, tournamentSize: 5, mutationRate: 0.4, mutationDecay: 0.98, minMutationRate: 0.05 },
+        rng,
+      );
       const view = new XorView(stage, STAGE_WIDTH, STAGE_HEIGHT);
       return new GaSimulation(2, new Runner(env, ga, 100), view, "fitness", (best) => `${best.toFixed(3)} / 4`);
     },
