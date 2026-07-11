@@ -3,6 +3,7 @@ import { Rng } from "../src/core/rng.js";
 import {
   CoevolutionDriver,
   competitiveFitnessSharing,
+  dominanceCount,
   type CoevolutionConfig,
   type CoevolutionState,
 } from "../src/search/coevolution.js";
@@ -21,6 +22,37 @@ const config: CoevolutionConfig = {
 function freshState(env: PredatorPreyEnvironment, size: number): CoevolutionState {
   return { predators: env.newPredators(size), prey: env.newPrey(size) };
 }
+
+describe("dominanceCount", () => {
+  it("counts only ancestral opponents strictly beaten (payoff > 0.5)", () => {
+    // 0.6 and 0.51 are captures; 0.5 is a boundary escape; 0.2 is a loss.
+    expect(dominanceCount([0.6, 0.51, 0.5, 0.2])).toBe(2);
+  });
+
+  it("is zero for an empty history and for a champion that beats no one", () => {
+    expect(dominanceCount([])).toBe(0);
+    expect(dominanceCount([0.4, 0.3, 0.5])).toBe(0);
+  });
+
+  it("never exceeds the number of ancestral opponents", () => {
+    const row = [0.9, 0.8, 0.7];
+    expect(dominanceCount(row)).toBeLessThanOrEqual(row.length);
+    expect(dominanceCount(row)).toBe(3);
+  });
+
+  it("is non-decreasing as a predator lineage strictly improves against a fixed archive", () => {
+    // Three CIAO rows for successively stronger predator champions against the
+    // same growing prey archive: each strictly dominates more ancestors.
+    const gen1 = [0.55]; // beats the one ancestor so far
+    const gen2 = [0.6, 0.4]; // still beats the first, not yet the new one
+    const gen3 = [0.7, 0.58]; // now beats both
+    const counts = [gen1, gen2, gen3].map(dominanceCount);
+    expect(counts).toEqual([1, 1, 2]);
+    for (let i = 1; i < counts.length; i++) {
+      expect(counts[i] as number).toBeGreaterThanOrEqual(counts[i - 1] as number);
+    }
+  });
+});
 
 describe("competitiveFitnessSharing", () => {
   it("weights a win by how few others share it", () => {

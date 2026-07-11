@@ -9,7 +9,9 @@
     "preview": "vite preview",
     "test": "vitest run",
     "test:watch": "vitest",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "experiment": "node --experimental-transform-types --import ./scripts/ts-import-hook.mjs src/headless/runExperiment.ts",
+    "bench": "node --experimental-transform-types --import ./scripts/ts-import-hook.mjs src/headless/runBench.ts"
   },
   "devDependencies": {
     "typescript": "^5.4.0",

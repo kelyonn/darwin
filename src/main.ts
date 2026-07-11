@@ -2,7 +2,7 @@ import { Rng } from "./core/rng.js";
 import { GenerationalGA } from "./core/ga.js";
 import { Network } from "./core/network.js";
 import { Runner } from "./app/runner.js";
-import { CoevolutionDriver, type CoevolutionState } from "./search/coevolution.js";
+import { CoevolutionDriver, dominanceCount, type CoevolutionState } from "./search/coevolution.js";
 import { NoveltySearch } from "./search/novelty.js";
 import { MapElites } from "./search/mapElites.js";
 import { CREAM } from "./render/palette.js";
@@ -53,6 +53,8 @@ interface Readout {
   readonly metricLabel: string;
   readonly metricValue: string;
   readonly secondary?: { readonly label: string; readonly value: string };
+  /** A third readout line, used by predator–prey for the dominance-tournament count. */
+  readonly tertiary?: { readonly label: string; readonly value: string };
 }
 
 /**
@@ -147,7 +149,14 @@ class CoevolutionSimulation implements Simulation {
     // CIAO row: this generation's champion predator versus every ancestral prey
     // champion. Rising scores down a column mean the predator lineage is truly
     // improving; flat bands mean it is only cycling.
-    this.ciao.push(this.preyChampions.map((prey) => this.environment.compete(championPredator, prey).predatorScore));
+    const ciaoRow = this.preyChampions.map((prey) => this.environment.compete(championPredator, prey).predatorScore);
+    this.ciao.push(ciaoRow);
+
+    // Dominance tournament: how many ancestral prey champions this predator would
+    // catch. Because coevolutionary fitness is relative and unreadable across
+    // generations (RESEARCH.md §4.5), this absolute count is the honest progress
+    // signal the raw fitness cannot give — read straight from the CIAO row.
+    const dominated = dominanceCount(ciaoRow);
 
     this.episode = this.environment.createEpisode(championPredator, championPrey);
     this.state = next;
@@ -159,6 +168,10 @@ class CoevolutionSimulation implements Simulation {
       secondary: {
         label: "predator / prey",
         value: `${stats.bestPredatorFitness.toFixed(2)} / ${stats.bestPreyFitness.toFixed(2)}`,
+      },
+      tertiary: {
+        label: "dominates",
+        value: `${dominated} / ${this.preyChampions.length} ancestors`,
       },
     };
   }
@@ -609,11 +622,13 @@ function main(): void {
   };
 
   const renderReadout = (): void => {
-    const { generation, metricLabel, metricValue, secondary } = active.readout;
+    const { generation, metricLabel, metricValue, secondary, tertiary } = active.readout;
+    const line = (label: string, value: string): string => `<div style="margin-top:4px;">${label} ${value}</div>`;
     readoutEl.innerHTML =
       `<div>generation ${generation}</div>` +
-      `<div style="margin-top:4px;">${metricLabel} ${metricValue}</div>` +
-      (secondary !== undefined ? `<div style="margin-top:4px;">${secondary.label} ${secondary.value}</div>` : "");
+      line(metricLabel, metricValue) +
+      (secondary !== undefined ? line(secondary.label, secondary.value) : "") +
+      (tertiary !== undefined ? line(tertiary.label, tertiary.value) : "");
   };
 
   const load = (index: number): void => {

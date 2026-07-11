@@ -6,6 +6,45 @@ unreleased, so entries are grouped by milestone rather than version.
 
 ## [Unreleased]
 
+### Added — M11 headless batch runner
+- `src/headless/runExperiment.ts`: a DOM-free CLI that drives the same
+  representation-blind `core/` + `search/` code across many seeds, emitting tidy
+  long-format CSV/JSON (one row per generation per seed) for the 7 GA-driven
+  environments. The substrate the RESEARCH.md §7 cross-representation study needs.
+- Runs under Node's native TypeScript with **zero new dependencies**:
+  `--experimental-transform-types` plus `scripts/ts-import-hook.mjs`, a ~15-line
+  resolver mapping the source tree's `.js` specifiers onto the `.ts` files.
+- `npm run experiment -- --env <name|all> [--seeds 0-4] [--generations N] [--format csv|json]`.
+- `test/headless.test.ts`: byte-identical reproducibility + well-formed output.
+
+### Added — M8 performance measurement (and the finding: no pooling needed)
+- `src/headless/runBench.ts` (`npm run bench`): reports *measured* gens/sec and
+  genome-allocs/gen at population 100–3000 for one-shot and episodic environments.
+- Finding (recorded in `.docs/known-issues.md`): evaluation dominates, not
+  allocation — a vector genome runs ~4–5× faster than the tiny XOR network with
+  identical allocation counts, and episodic cart-pole is ~30× slower still.
+  `feedForward` is already zero-alloc, so buffer pooling was deliberately **not**
+  implemented (it would optimise the cheapest part). No fabricated numbers (PRD §8).
+
+### Added — dominance-tournament progress metric
+- `dominanceCount(ciaoRow)` in `search/coevolution.ts`: how many ancestral prey
+  champions the current predator champion catches (payoff > 0.5), read for free
+  from the CIAO row. An absolute progress proxy since coevolutionary fitness is
+  relative and unreadable across generations (RESEARCH.md §4.5).
+- Surfaced as a third readout line ("dominates N/M ancestors") on the predator–prey
+  plate; `Readout` gained an optional `tertiary` line. 4 tests in `coevolution.test.ts`.
+
+### Added — ship-readiness
+- README rewritten thesis-first with an accurate plate table (was still claiming
+  "Working today: Weasel"); keeps the honest maze caveat.
+- `.github/workflows/ci.yml` (typecheck + test + build) and `deploy.yml`
+  (build → GitHub Pages on `main`).
+
+### Fixed — debug traces would have shipped to production
+- Removed `public/maze_trace.json` and `public/track_trace.json`: Vite copies
+  `public/` verbatim into `dist/`, so these headless debug traces would have been
+  published on the live site. `.gitignore` now excludes `*_trace.json` / `scratchpad*`.
+
 ### Added — XOR "cases solved" signal
 - `GaSimulation` gained an optional `secondaryMetric(champion) => {label, value}`
   callback (computed from the champion genome, not just its fitness scalar) —

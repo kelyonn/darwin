@@ -13,13 +13,15 @@ something running.
 | M5 | Cart-pole (episodic + sim/render split) | ✅ done | balances varied starts, improves over generations, reproducible |
 | M7 | Observability: canvas views per env, selector, fitness chart, `Runner` | ✅ done | all 4 environments render; verified on screen |
 | M6 | Track runner (raycast sensors) | ✅ done | ring track, 5-ray sensors, radius-weighted `checkpoints·K + distance` (see ADR-009 — the naive version was reward-hackable); champion verified centred on the track midline, fitness ceiling ~210 matches the computed theoretical max for a genuine lap |
-| M8 | Performance pass (typed-array reuse, worker, `kernel/cpu.ts`) | ◐ partial | Float32Array weights already in `network.ts`/`matrix.ts`; buffer pooling + worker + measured 60 FPS numbers remain |
-| M9 | Predator–prey + `search/coevolution.ts` (Hall of Fame, sampling, sharing) + CIAO plot + browser view | ✅ done | `CoevolutionDriver` + `predatorPrey.ts`; 11 tests. Wired as the default landing view via a `Simulation` adapter in `main.ts`; live arena + CIAO heatmap + capture-rate pulse. Verified on screen: capture rate oscillates ~25–45% (engaged arms race) |
+| M8 | Performance pass (measurement + honest finding) | ✅ measured | `headless/runBench.ts` reports real gens/sec + genome-allocs/gen at population 100–3000. **Finding: buffer pooling is not warranted** — evaluation (episodic sims + network feed-forward) dominates, not per-generation allocation (measured: vector genomes hit ~1.3M eval/s vs ~300k for the tiny XOR network with identical allocation counts; episodic cart-pole is ~30× slower still). `feedForward` is already zero-alloc. Web Worker + WASM/WebGPU (M12) are where real speedups live. See known-issues.md |
+| M9 | Predator–prey + `search/coevolution.ts` (Hall of Fame, sampling, sharing) + CIAO plot + browser view | ✅ done | `CoevolutionDriver` + `predatorPrey.ts`. Default landing view; live arena + CIAO heatmap + capture-rate pulse + **dominance-tournament readout** (`dominanceCount`, an absolute progress proxy since relative fitness can't be read across generations — RESEARCH.md §4.5). Verified on screen: capture rate ~25–45%, dominance count climbs |
 | M10 | Maze + `search/novelty.ts`; Gait + `search/mapElites.ts` | ✅ done | both wired and verified on screen (see below) |
-| M11 | `headless/runExperiment.ts` — batch runner | ⬜ | research substrate (RESEARCH.md §7) |
-| M12 | Scale: `kernel/gpu.ts` (WebGPU) + `kernel/wasm.ts`; three-backend benchmark | ⬜ | large, separate effort; measure — never fabricate (PRD §8) |
+| M11 | `headless/runExperiment.ts` — batch runner | ✅ done | DOM-free CLI reusing `Runner`/`GenerationalGA` across 7 GA environments; byte-identical CSV/JSON per seed. Runs under Node's native TS (`--experimental-transform-types` + a zero-dep import hook mapping `.js`→`.ts`), **no new runtime deps**. `test/headless.test.ts` locks in reproducibility. `npm run experiment` |
+| M12 | Scale: `kernel/gpu.ts` (WebGPU) + `kernel/wasm.ts`; three-backend benchmark | ⬜ | large, separate effort; measure — never fabricate (PRD §8). M8's measurement points here as the real hot path |
 
-Test status: **92 passing** across 17 files. Typecheck clean under full strict mode.
+Test status: **101 passing** across 18 files. Typecheck clean under full strict mode.
+Ship-readiness: README rewritten (thesis-first, accurate), CI + GitHub Pages deploy
+workflows added, debug trace files removed from `public/` (they would have shipped to prod).
 
 ## Current focus
 M6, M9, and M10 are all **complete and demoable**.

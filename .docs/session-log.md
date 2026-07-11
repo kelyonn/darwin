@@ -2,6 +2,44 @@
 
 Newest first. One entry per working session: what changed, decisions, next step.
 
+## Session 6 — ship-readiness, M11 headless runner, M8 measurement, dominance metric
+Four-part improvement pass (planned as "everything"):
+- **Ship-readiness.** Rewrote the badly stale README (it still claimed "Working today:
+  Weasel" when all 10 environments + the redesign were done) — now thesis-first with a
+  plate table and honest maze caveat. Added `.github/workflows/ci.yml` (typecheck +
+  test + build on push/PR) and `deploy.yml` (build → GitHub Pages on `main`). **Real
+  bug fixed:** `public/maze_trace.json` + `public/track_trace.json` were headless debug
+  traces sitting in Vite's `public/` dir, so they'd have been copied verbatim into the
+  deployed `dist/`; deleted them and gitignored `*_trace.json` / `scratchpad*`.
+- **M11 — headless batch runner.** New `src/headless/runExperiment.ts`: a DOM-free CLI
+  reusing the existing `Runner` + `GenerationalGA` across 7 GA environments, emitting
+  tidy long-format CSV/JSON (one row per generation per seed). Runs under Node's native
+  TypeScript with **zero new deps**: `--experimental-transform-types` (needed for the
+  codebase's parameter properties — plain `--experimental-strip-types` rejects them)
+  plus a ~15-line import hook (`scripts/ts-import-hook.mjs`) that maps the source
+  tree's `.js` specifiers onto the `.ts` files on disk. `test/headless.test.ts` locks
+  in byte-identical reproducibility. `npm run experiment`.
+- **M8 — measured, and the honest finding is "no change needed."** New
+  `src/headless/runBench.ts` (`npm run bench`) times real gens/sec + genome-allocs/gen
+  at population 100–3000. Result: evaluation dominates, not allocation — a vector
+  genome hits ~1.3M eval/s vs ~300k for the tiny XOR network *with identical
+  allocation counts*, and episodic cart-pole is ~30× slower still. `feedForward` is
+  already zero-alloc. So buffer pooling was **deliberately not implemented** (it would
+  optimise the cheapest part); recorded as a measured result, pointing future perf
+  work at M12's kernel. Never fabricated a number (PRD §8).
+- **Dominance-tournament metric.** Added `dominanceCount(ciaoRow)` to
+  `search/coevolution.ts` — how many ancestral prey champions the current predator
+  champion catches (payoff > 0.5), derived for free from the CIAO row already built.
+  Surfaced as a third readout line on the predator–prey plate ("dominates N/M
+  ancestors"): an absolute progress proxy since relative fitness can't be read across
+  generations (RESEARCH.md §4.5). 4 new tests in `coevolution.test.ts`; verified live
+  ("dominates 33 / 71 ancestors" at gen 70, no console errors).
+- **Tests:** 101/101 across 18 files (was 92/17); `tsc --noEmit` clean; `npm run build`
+  clean with no headless/trace leakage into `dist/`.
+- **Next:** enable GitHub Pages in repo settings so `deploy.yml` publishes; drop the
+  real Pages URL + an arms-race GIF into the README; then the RESEARCH.md H1
+  cross-representation study as a `--study` mode on the headless runner.
+
 ## Session 5 — specimen-plate visual redesign
 - **Implemented a Claude Design handoff.** A design mockup
   (`project-darwin-design-system/`, a Claude Design HTML/CSS/JS export) specified a

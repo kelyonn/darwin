@@ -155,10 +155,23 @@ several plates looked stuck:
   at the most recent 60 generations for legibility (older history is retained in memory
   but not drawn).
 
-## Performance (M8, deferred)
-- Buffer pooling and the Web Worker are not yet implemented; on the M5 the frame rate
-  hides per-frame allocation until scale. Measure allocations directly, not FPS.
-- No measured 60 FPS numbers recorded yet — do not claim any until measured (PRD §8).
+## Performance (M8 — measured; buffer pooling is NOT warranted)
+- **Measured, not assumed** (via `src/headless/runBench.ts`; `npm run bench`). On the
+  dev machine (Node v22): a **vector** genome (Landscape, no network) runs at
+  ~0.7–1.4M evaluations/sec, while the **tiny XOR network** runs at only ~250–300k
+  eval/sec — with *identical* genome-allocation counts per generation. So the 4–5×
+  gap is the network's `feedForward` compute, **not** allocation. Episodic cart-pole
+  is ~7–10k eval/sec, ~30× slower than one-shot XOR — evaluation utterly dominates.
+- **Conclusion: buffer pooling would optimise the cheapest part.** `feedForward` is
+  already zero-allocation (it reuses preallocated activation buffers); the only
+  per-generation churn is genome *creation* (2 backing arrays per bred child + 1 per
+  elite clone), which V8 handles cheaply and which is dwarfed by evaluation cost.
+  Pooling was therefore **deliberately not implemented** — a measured "no change
+  needed" result (PRD §8). The real hot path is the network kernel and episodic
+  sims, which is exactly what M12 (WASM/WebGPU) targets.
+- **Still open:** the Web Worker (move episodic sims off the render thread) and the
+  in-browser 60-FPS-at-scale number. `runBench.ts` measures headless throughput, not
+  browser frame rate; do not claim a 60 FPS figure until measured in a real browser (PRD §8).
 
 ## Process
 - Memory-doc suite is maintained by hand; `session-log.md` and `CHANGELOG.md` must be

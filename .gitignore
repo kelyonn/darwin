@@ -4,6 +4,10 @@ dist/
 .DS_Store
 coverage/
 
+# Headless debug traces and scratch output (never commit; never let Vite ship them)
+*_trace.json
+scratchpad*
+
 # Claude Design handoff bundle (implemented; kept locally for reference)
 /project-darwin-design-system/
 /Project Darwin Design System-handoff.zip

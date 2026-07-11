@@ -65,6 +65,33 @@ export interface CoevolutionStepResult {
 }
 
 /**
+ * The predator-payoff threshold above which a contest counts as a capture — the
+ * predator "beating" that prey. `predatorScore` is strictly above 0.5 iff the
+ * prey was caught (see {@link CompetitionOutcome} / `predatorPrey.ts`).
+ */
+const DOMINANCE_THRESHOLD = 0.5;
+
+/**
+ * Dominance count (a dominance-tournament progress proxy; Stanley;
+ * RESEARCH.md §4.5): how many ancestral opponents the current champion beats,
+ * read straight from its CIAO row (the champion predator's payoff against every
+ * past prey champion). Because coevolutionary fitness is *relative* and cannot
+ * be compared across generations, a rising dominance count is one of the few
+ * honest absolute signals that the predator lineage is genuinely improving
+ * rather than merely cycling — though it is a monotone-ish proxy, not a
+ * guarantee.
+ *
+ * @param ciaoRow The current champion's score against each ancestral opponent.
+ */
+export function dominanceCount(ciaoRow: readonly number[]): number {
+  let beaten = 0;
+  for (const score of ciaoRow) {
+    if (score > DOMINANCE_THRESHOLD) beaten++;
+  }
+  return beaten;
+}
+
+/**
  * Competitive fitness sharing (Rosin & Belew, 1997). Given a win matrix where
  * `wins[i][o]` is true iff contestant `i` beat shared opponent `o`, each
  * contestant scores `Σ 1 / (number of contestants that beat o)` over the
