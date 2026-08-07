@@ -4,11 +4,14 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Project Darwin</title>
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link
-      href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&display=swap"
-      rel="stylesheet"
-    />
+    <!--
+      No web font: the project's headline claim is zero runtime dependencies,
+      and fetching JetBrains Mono from fonts.googleapis.com was a real external
+      network request contradicting that (plus an offline failure mode).
+      "JetBrains Mono" stays first in every font stack below in case a visitor
+      has it installed locally; every rule falls through to
+      ui-monospace/Menlo/monospace otherwise (§4.5, .docs/remediation-plan.md).
+    -->
     <style>
       :root {
         color-scheme: light;
@@ -47,9 +50,12 @@
         transform-origin: top left;
       }
       /* No fixed width here (unlike .plate-frame/.footnote, which are pinned
-         to the 1180px design): the tab bar can outgrow 1180px as more
-         environments are added, so .page shrink-wraps to whichever is wider —
-         the header row or the 1180px plate — instead of clipping tabs. */
+         to the 1180px design): five tabs comfortably fit inside 1180px, but
+         .page still shrink-wraps to whichever is wider — the header row or
+         the 1180px plate — rather than assuming the tab bar never will,
+         since a narrow viewport (or a future plate) can still push it past
+         1180px and .tabs { overflow: hidden } would silently clip instead
+         of wrapping. */
       .page {
         display: flex;
         flex-direction: column;
@@ -65,14 +71,69 @@
         gap: 40px;
         margin-bottom: 22px;
       }
+      /* Run controls (§4.4, .docs/remediation-plan.md): a re-seed input,
+         pause/step/reset, and a speed control, so a viewer can verify what
+         they're seeing wasn't a lucky seed rather than take it on faith. */
+      .controls-row {
+        min-width: 1180px;
+        display: flex;
+        align-items: center;
+        flex-wrap: wrap;
+        gap: 20px;
+        margin-bottom: 18px;
+      }
+      .control-group {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+      }
+      .control-label {
+        font: 500 9px "JetBrains Mono", ui-monospace, Menlo, monospace;
+        color: rgba(28, 27, 23, 0.55);
+        letter-spacing: 0.08em;
+      }
+      .control-input {
+        font: 500 10px "JetBrains Mono", ui-monospace, Menlo, monospace;
+        color: #1c1b17;
+        background: #f7f3e8;
+        border: 1px solid rgba(28, 27, 23, 0.35);
+        border-radius: 2px;
+        padding: 5px 6px;
+        width: 72px;
+      }
+      .control-btn {
+        cursor: pointer;
+        user-select: none;
+        font: 500 10px "JetBrains Mono", ui-monospace, Menlo, monospace;
+        letter-spacing: 0.06em;
+        color: #1c1b17;
+        background: transparent;
+        border: 1px solid rgba(28, 27, 23, 0.35);
+        border-radius: 2px;
+        padding: 6px 12px;
+        transition:
+          background 0.15s ease,
+          color 0.15s ease;
+      }
+      .control-btn:hover:not(:disabled) {
+        background: rgba(28, 27, 23, 0.08);
+      }
+      .control-btn:disabled {
+        opacity: 0.35;
+        cursor: default;
+      }
+      .control-btn-active {
+        color: #efe9db;
+        background: #1c1b17;
+      }
       .title {
-        font: 600 13px "JetBrains Mono", monospace;
+        font: 600 13px "JetBrains Mono", ui-monospace, Menlo, monospace;
         color: #1c1b17;
         letter-spacing: 0.2em;
       }
       .subtitle {
         margin-top: 5px;
-        font: 400 10px "JetBrains Mono", monospace;
+        font: 400 10px "JetBrains Mono", ui-monospace, Menlo, monospace;
         color: rgba(28, 27, 23, 0.48);
         letter-spacing: 0.14em;
       }
@@ -88,7 +149,7 @@
         cursor: pointer;
         user-select: none;
         padding: 9px 16px;
-        font: 500 10.5px "JetBrains Mono", monospace;
+        font: 500 10.5px "JetBrains Mono", ui-monospace, Menlo, monospace;
         letter-spacing: 0.08em;
         color: #1c1b17;
         background: transparent;
@@ -135,7 +196,7 @@
       }
       .plate-summary {
         margin-top: 4px;
-        font: 400 10px "JetBrains Mono", monospace;
+        font: 400 10px "JetBrains Mono", ui-monospace, Menlo, monospace;
         color: rgba(28, 27, 23, 0.5);
         letter-spacing: 0.06em;
       }
@@ -144,15 +205,115 @@
         top: 32px;
         right: 40px;
         text-align: right;
-        font: 400 10px "JetBrains Mono", monospace;
+        font: 400 11px "JetBrains Mono", ui-monospace, Menlo, monospace;
         color: rgba(28, 27, 23, 0.6);
         letter-spacing: 0.06em;
+      }
+      /* The one number meant to answer "is this actually improving?" at a
+         glance — bold and moss-coloured so it reads as a headline result,
+         not another line of plain metadata. */
+      .readout-highlight {
+        font-weight: 700;
+        font-size: 13px;
+        color: #4a7c59;
       }
       .footnote {
         width: 1180px;
         margin: 20px 0 0;
-        font: 11px/1.7 "JetBrains Mono", monospace;
+        font: 11px/1.7 "JetBrains Mono", ui-monospace, Menlo, monospace;
         color: rgba(28, 27, 23, 0.45);
+      }
+      /* A discoverable "what am I looking at" explainer (§ info card) — the
+         footnote already carries this per-plate, but it's easy to skip past
+         as small text below the fold; this puts it one click away and adds
+         the general neuroevolution primer the footnote never had room for. */
+      .info-btn {
+        cursor: pointer;
+        user-select: none;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 16px;
+        height: 16px;
+        margin-left: 8px;
+        font: 600 10px "JetBrains Mono", ui-monospace, Menlo, monospace;
+        color: #1c1b17;
+        background: transparent;
+        border: 1px solid rgba(28, 27, 23, 0.45);
+        border-radius: 50%;
+        vertical-align: middle;
+        transition:
+          background 0.15s ease,
+          color 0.15s ease;
+      }
+      .info-btn:hover {
+        background: #1c1b17;
+        color: #efe9db;
+      }
+      .info-overlay {
+        position: fixed;
+        inset: 0;
+        background: rgba(28, 27, 23, 0.5);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        z-index: 100;
+        padding: 24px;
+        box-sizing: border-box;
+      }
+      .info-overlay[hidden] {
+        display: none;
+      }
+      .info-card {
+        position: relative;
+        width: 560px;
+        max-width: 100%;
+        max-height: 82vh;
+        overflow-y: auto;
+        background: #f7f3e8;
+        border: 1px solid rgba(28, 27, 23, 0.35);
+        border-radius: 3px;
+        box-shadow: 0 24px 70px rgba(0, 0, 0, 0.28);
+        padding: 28px 32px;
+        box-sizing: border-box;
+      }
+      .info-card h2 {
+        margin: 0 0 10px;
+        font: 600 12px "JetBrains Mono", ui-monospace, Menlo, monospace;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: #1c1b17;
+      }
+      .info-card p {
+        margin: 0 0 10px;
+        font: 11px/1.7 "JetBrains Mono", ui-monospace, Menlo, monospace;
+        color: rgba(28, 27, 23, 0.75);
+      }
+      .info-card p:last-child {
+        margin-bottom: 0;
+      }
+      .info-divider {
+        border: none;
+        border-top: 1px solid rgba(28, 27, 23, 0.2);
+        margin: 20px 0;
+      }
+      .info-close {
+        position: absolute;
+        top: 14px;
+        right: 14px;
+        cursor: pointer;
+        width: 22px;
+        height: 22px;
+        line-height: 20px;
+        text-align: center;
+        font: 500 13px "JetBrains Mono", ui-monospace, Menlo, monospace;
+        color: #1c1b17;
+        background: transparent;
+        border: 1px solid rgba(28, 27, 23, 0.35);
+        border-radius: 2px;
+      }
+      .info-close:hover {
+        background: rgba(28, 27, 23, 0.08);
       }
     </style>
   </head>

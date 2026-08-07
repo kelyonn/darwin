@@ -23,6 +23,16 @@ const INSET_WIDTH = 176;
 const INSET_HEIGHT = 156;
 const INSET_MARGIN = 44;
 
+/**
+ * How far inside a lens's outer rim `drawLens`'s decorative inner ring sits —
+ * and, critically, the radius every view must clip its own drawing to so the
+ * content lines up with that inner ring instead of drawing over the rim.
+ * Named because every view previously duplicated this as a bare `14`
+ * (14 call sites, plus `drawLens` itself) — editing the border width meant
+ * hunting down every copy by hand, with no error if one was missed.
+ */
+export const LENS_CLIP_INSET = 14;
+
 /** The plate canvas dimensions every view draws into. */
 export const PLATE = { width: STAGE_WIDTH, height: STAGE_HEIGHT } as const;
 
@@ -113,7 +123,7 @@ export function drawLens(ctx: CanvasRenderingContext2D, cx: number, cy: number, 
   ctx.strokeStyle = "rgba(28,27,23,0.2)";
   ctx.lineWidth = 1;
   ctx.beginPath();
-  ctx.arc(cx, cy, radius - 14, 0, Math.PI * 2);
+  ctx.arc(cx, cy, radius - LENS_CLIP_INSET, 0, Math.PI * 2);
   ctx.stroke();
 }
 
@@ -133,7 +143,13 @@ export function drawInsetPanel(
   ctx.fillText(caption, x, y - 8);
 }
 
-/** Best/average fitness history, drawn as two overlaid lines inside an inset panel. */
+/**
+ * Best/average/worst fitness history, drawn as overlaid lines inside an inset
+ * panel. `worsts` is optional (Weasel/TSP don't pass it — their episode-free,
+ * one-shot fitness never dips in a way worth charting); when present it's
+ * drawn in the same rust tone as a crash marker, since "worst" is where a
+ * population's failures live.
+ */
 export function drawSparkline(
   ctx: CanvasRenderingContext2D,
   x: number,
@@ -142,12 +158,14 @@ export function drawSparkline(
   height: number,
   bests: readonly number[],
   averages: readonly number[],
+  worsts?: readonly number[],
 ): void {
   if (bests.length < 2) {
     return;
   }
-  const max = Math.max(...bests);
-  const min = Math.min(...averages);
+  const allValues = worsts !== undefined ? [...bests, ...averages, ...worsts] : [...bests, ...averages];
+  const max = Math.max(...allValues);
+  const min = Math.min(...allValues);
   const range = max - min || 1;
   const toX = (i: number, n: number): number => x + (i / (n - 1)) * width;
   const toY = (v: number): number => y + height - ((v - min) / range) * height;
@@ -163,6 +181,7 @@ export function drawSparkline(
     });
     ctx.stroke();
   };
+  if (worsts !== undefined) drawSeries(worsts, "rgba(178,58,42,0.75)");
   drawSeries(averages, "rgba(201,161,90,0.85)");
   drawSeries(bests, "rgba(74,124,89,0.9)");
 }

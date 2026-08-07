@@ -6,6 +6,7 @@ import {
   MOSS,
   AMBER,
   INSET_RECT,
+  LENS_CLIP_INSET,
   dot,
   inkAgent,
   annotate,
@@ -13,34 +14,25 @@ import {
   drawInsetPanel,
   drawSparkline,
   heatColor,
-  mix,
 } from "./palette.js";
-import { StringGenome } from "../genomes/stringGenome.js";
-import { VectorGenome } from "../genomes/vectorGenome.js";
-import { PermutationGenome } from "../genomes/permutationGenome.js";
-import { Network } from "../core/network.js";
-import { rastrigin } from "../environments/landscape.js";
-import { XOR_CASES } from "../environments/xor.js";
 import {
-  CartPoleEnvironment,
-  CART_POLE_TRACK_LIMIT,
-  type LiveCartPoleEpisode,
-} from "../environments/cartpole.js";
+  LENS_CX,
+  LENS_CY,
+  LENS_R,
+  MAX_FITNESS_HISTORY,
+  CRASH_MARKER_ROUNDS,
+  CRASH_MARKER_RADIUS,
+} from "./layout.js";
+import { StringGenome } from "../genomes/stringGenome.js";
+import { PermutationGenome } from "../genomes/permutationGenome.js";
 import type { TspEnvironment } from "../environments/tsp.js";
 import {
   PREDATOR_PREY_ARENA_SIZE,
   PREDATOR_PREY_CAPTURE_RADIUS,
   type PredatorPreySnapshot,
 } from "../environments/predatorPrey.js";
-import type { TrackRunnerEnvironment, LiveTrackEpisode } from "../environments/trackrunner.js";
-import type { MazeEnvironment, MazeSnapshot } from "../environments/maze.js";
-import type { GaitSnapshot } from "../environments/gait.js";
-import type { ArchiveEntry } from "../search/mapElites.js";
-
-/** The plate's default single-lens geometry, shared by most environments. */
-const LENS_CX = 590;
-const LENS_CY = 380;
-const LENS_R = 260;
+import type { TrackRunnerEnvironment } from "../environments/trackrunner.js";
+import type { MazeEnvironment } from "../environments/maze.js";
 
 /**
  * Renders one environment's plate: the circular lens, its radial annotations,
@@ -59,7 +51,18 @@ function clearPlate(ctx: CanvasRenderingContext2D, width: number, height: number
   ctx.fillRect(0, 0, width, height);
 }
 
-function fitnessInset(ctx: CanvasRenderingContext2D, history: readonly PopulationStats[], caption = "fig. a — fitness"): void {
+/**
+ * `showWorst` adds a third rust-toned line tracking the population's worst
+ * fitness each generation (Track Runner, Maze) — the other views' one-shot
+ * fitness doesn't have an animated "worst" role to pair it with, so they
+ * leave it off rather than plot a number nothing on screen corresponds to.
+ */
+function fitnessInset(
+  ctx: CanvasRenderingContext2D,
+  history: readonly PopulationStats[],
+  caption = "fig. a — fitness",
+  showWorst = false,
+): void {
   drawInsetPanel(ctx, INSET_RECT.x, INSET_RECT.y, INSET_RECT.width, INSET_RECT.height, caption);
   drawSparkline(
     ctx,
@@ -69,6 +72,7 @@ function fitnessInset(ctx: CanvasRenderingContext2D, history: readonly Populatio
     INSET_RECT.height - 16,
     history.map((h) => h.best),
     history.map((h) => h.average),
+    showWorst ? history.map((h) => h.worst) : undefined,
   );
 }
 
@@ -87,7 +91,7 @@ export class WeaselView implements EnvironmentView {
   onGeneration(result: GenerationResult): void {
     this.best = result.best as StringGenome;
     this.history.push(result.stats);
-    if (this.history.length > 400) this.history.shift();
+    if (this.history.length > MAX_FITNESS_HISTORY) this.history.shift();
   }
 
   animate(): void {
@@ -96,7 +100,7 @@ export class WeaselView implements EnvironmentView {
     drawLens(ctx, LENS_CX, LENS_CY, LENS_R);
     ctx.save();
     ctx.beginPath();
-    ctx.arc(LENS_CX, LENS_CY, LENS_R - 14, 0, Math.PI * 2);
+    ctx.arc(LENS_CX, LENS_CY, LENS_R - LENS_CLIP_INSET, 0, Math.PI * 2);
     ctx.clip();
 
     const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ ";
@@ -127,61 +131,6 @@ export class WeaselView implements EnvironmentView {
   }
 }
 
-/** Landscape: the cached Rastrigin surface with the population scattered over it. */
-export class LandscapeView implements EnvironmentView {
-  private readonly surface: HTMLCanvasElement;
-  private readonly bounds: readonly [number, number] = [-5.12, 5.12];
-  private population: readonly VectorGenome[] = [];
-  private best: VectorGenome | null = null;
-  private readonly history: PopulationStats[] = [];
-
-  constructor(
-    private readonly ctx: CanvasRenderingContext2D,
-    private readonly width: number,
-    private readonly height: number,
-  ) {
-    this.surface = renderRastriginSurface(this.bounds);
-  }
-
-  onGeneration(result: GenerationResult): void {
-    this.population = result.evaluated as readonly VectorGenome[];
-    this.best = result.best as VectorGenome;
-    this.history.push(result.stats);
-    if (this.history.length > 400) this.history.shift();
-  }
-
-  animate(): void {
-    const { ctx } = this;
-    clearPlate(ctx, this.width, this.height);
-    drawLens(ctx, LENS_CX, LENS_CY, LENS_R);
-    ctx.save();
-    ctx.beginPath();
-    ctx.arc(LENS_CX, LENS_CY, LENS_R - 14, 0, Math.PI * 2);
-    ctx.clip();
-    const side = (LENS_R - 14) * 2;
-    const ox = LENS_CX - side / 2;
-    const oy = LENS_CY - side / 2;
-    ctx.drawImage(this.surface, ox, oy, side, side);
-
-    const [min, max] = this.bounds;
-    const toPx = (v: number): number => ox + ((v - min) / (max - min)) * side;
-    const toPy = (v: number): number => oy + (1 - (v - min) / (max - min)) * side;
-    for (const genome of this.population) {
-      const [x, y] = genome.coordinates;
-      dot(ctx, toPx(x ?? 0), toPy(y ?? 0), 1.6, "rgba(28,27,23,0.4)");
-    }
-    if (this.best !== null) {
-      const [bx, by] = this.best.coordinates;
-      inkAgent(ctx, toPx(bx ?? 0), toPy(by ?? 0), 0, MOSS);
-    }
-    ctx.restore();
-
-    annotate(ctx, LENS_CX, LENS_CY, LENS_R, -0.6, "optimum", MOSS);
-    annotate(ctx, LENS_CX, LENS_CY, LENS_R, 0.6, "population", INK);
-    fitnessInset(ctx, this.history);
-  }
-}
-
 /** TSP: node positions and the current best route. */
 export class TspView implements EnvironmentView {
   private best: PermutationGenome | null = null;
@@ -197,7 +146,7 @@ export class TspView implements EnvironmentView {
   onGeneration(result: GenerationResult): void {
     this.best = result.best as PermutationGenome;
     this.history.push(result.stats);
-    if (this.history.length > 400) this.history.shift();
+    if (this.history.length > MAX_FITNESS_HISTORY) this.history.shift();
   }
 
   animate(): void {
@@ -206,9 +155,9 @@ export class TspView implements EnvironmentView {
     drawLens(ctx, LENS_CX, LENS_CY, LENS_R);
     ctx.save();
     ctx.beginPath();
-    ctx.arc(LENS_CX, LENS_CY, LENS_R - 14, 0, Math.PI * 2);
+    ctx.arc(LENS_CX, LENS_CY, LENS_R - LENS_CLIP_INSET, 0, Math.PI * 2);
     ctx.clip();
-    const side = (LENS_R - 14) * 2 * 0.86;
+    const side = (LENS_R - LENS_CLIP_INSET) * 2 * 0.86;
     const ox = LENS_CX - side / 2;
     const oy = LENS_CY - side / 2;
     const nodes = this.environment.nodePositions;
@@ -239,84 +188,62 @@ export class TspView implements EnvironmentView {
   }
 }
 
-/** Cart-pole: the best controller balancing live, replaying when it falls. */
-export class CartPoleView implements EnvironmentView {
-  private episode: LiveCartPoleEpisode | null = null;
-  private champion: Network | null = null;
-  private readonly history: PopulationStats[] = [];
+/**
+ * The three population members Track Runner and Maze animate together each
+ * generation: the fittest, a middle-ranked member, and the least fit. Shown
+ * together (not the champion alone) so the population's *spread* narrowing
+ * over generations is visible, not just one lineage's score climbing
+ * (ADR-018, `.docs/decisions.md`).
+ */
+export type Role = "champion" | "median" | "worst";
 
-  constructor(
-    private readonly ctx: CanvasRenderingContext2D,
-    private readonly width: number,
-    private readonly height: number,
-    private readonly environment: CartPoleEnvironment,
-  ) {}
-
-  onGeneration(result: GenerationResult): void {
-    this.champion = result.best as Network;
-    this.episode = this.environment.createEpisode(this.champion);
-    this.history.push(result.stats);
-    if (this.history.length > 400) this.history.shift();
-  }
-
-  animate(): void {
-    if (this.champion !== null) {
-      if (this.episode === null || !this.episode.step()) {
-        this.episode = this.environment.createEpisode(this.champion);
-        this.episode.step();
-      }
-    }
-    const { position, angle } = this.episode?.snapshot ?? { position: 0, angle: 0 };
-
-    const { ctx } = this;
-    clearPlate(ctx, this.width, this.height);
-    drawLens(ctx, LENS_CX, LENS_CY, LENS_R);
-    ctx.save();
-    ctx.beginPath();
-    ctx.arc(LENS_CX, LENS_CY, LENS_R - 14, 0, Math.PI * 2);
-    ctx.clip();
-    const trackY = LENS_CY + 40;
-    ctx.strokeStyle = "rgba(28,27,23,0.3)";
-    ctx.beginPath();
-    ctx.moveTo(LENS_CX - LENS_R, trackY);
-    ctx.lineTo(LENS_CX + LENS_R, trackY);
-    ctx.stroke();
-
-    const cartX = LENS_CX + (position / CART_POLE_TRACK_LIMIT) * (LENS_R * 0.8);
-    const cartW = 56;
-    const cartH = 22;
-    const poleLength = 110;
-    ctx.fillStyle = "rgba(74,124,89,0.22)";
-    ctx.fillRect(cartX - cartW / 2, trackY - cartH / 2, cartW, cartH);
-    ctx.strokeStyle = "rgba(28,27,23,0.5)";
-    ctx.strokeRect(cartX - cartW / 2, trackY - cartH / 2, cartW, cartH);
-
-    const tipX = cartX + Math.sin(angle) * poleLength;
-    const tipY = trackY - cartH / 2 - Math.cos(angle) * poleLength;
-    ctx.strokeStyle = MOSS;
-    ctx.lineWidth = 5;
-    ctx.beginPath();
-    ctx.moveTo(cartX, trackY - cartH / 2);
-    ctx.lineTo(tipX, tipY);
-    ctx.stroke();
-    dot(ctx, tipX, tipY, 4, AMBER);
-    ctx.restore();
-
-    annotate(ctx, LENS_CX, LENS_CY, LENS_R, Math.PI / 2 + 0.9, "pole", AMBER);
-    annotate(ctx, LENS_CX, LENS_CY, LENS_R, Math.PI / 2 - 0.9, "cart", MOSS);
-    fitnessInset(ctx, this.history);
-  }
+/** Each role's fixed colour, consistent across both round-paced plates. */
+function roleColor(role: Role): string {
+  if (role === "champion") return MOSS;
+  if (role === "median") return AMBER;
+  return "rgb(178,58,42)"; // "worst" — the same rust used for crash markers, since it's the most likely to end up there
 }
 
-/** Track runner: the ring track and the champion's live drive. */
-export class TrackRunnerView implements EnvironmentView {
-  private episode: LiveTrackEpisode | null = null;
-  private champion: Network | null = null;
-  private readonly history: PopulationStats[] = [];
-  /** Fading trajectory trail — cleared on every new episode so a crash/restart
-   * never draws a line connecting the old lap to the new one. */
-  private trail: { x: number; y: number }[] = [];
+/** The `rgba(...)` triple form of {@link roleColor}, for trails that need to fade with age. */
+function roleTrailRgb(role: Role): string {
+  if (role === "champion") return "74,124,89";
+  if (role === "median") return "201,161,90";
+  return "178,58,42";
+}
 
+/** One role's position/state for a single rendered frame. */
+export interface TrackRunnerMemberFrame {
+  readonly role: Role;
+  readonly x: number;
+  readonly y: number;
+  readonly heading: number;
+  readonly trail: readonly { readonly x: number; readonly y: number }[];
+}
+
+/** Where a role's round ended, aged in rounds so the view can fade it out. */
+export interface TrackRunnerCrashMarker {
+  readonly x: number;
+  readonly y: number;
+  readonly roundsAgo: number;
+}
+
+/** Everything `TrackRunnerView.draw` needs for one frame — assembled by `TrackRunnerSimulation`. */
+export interface TrackRunnerFrame {
+  readonly members: readonly TrackRunnerMemberFrame[];
+  readonly crashMarkers: readonly TrackRunnerCrashMarker[];
+  readonly status: string;
+  readonly history: readonly PopulationStats[];
+}
+
+/**
+ * Track runner: the ring track and the current generation's three roles (see
+ * {@link Role}), each driving one attempt per generation. A pure renderer: it
+ * owns no episode or trail state itself — `TrackRunnerSimulation` advances
+ * the roles and hands this class a finished {@link TrackRunnerFrame} to draw.
+ * Past crashes persist as fading markers (see `draw`), so "what it got
+ * wrong" stays visible while watching the population improve.
+ */
+export class TrackRunnerView {
   constructor(
     private readonly ctx: CanvasRenderingContext2D,
     private readonly width: number,
@@ -324,33 +251,61 @@ export class TrackRunnerView implements EnvironmentView {
     private readonly environment: TrackRunnerEnvironment,
   ) {}
 
-  onGeneration(result: GenerationResult): void {
-    this.champion = result.best as Network;
-    this.episode = this.environment.createEpisode(this.champion);
-    this.trail = [];
-    this.history.push(result.stats);
-    if (this.history.length > 400) this.history.shift();
-  }
-
-  animate(): void {
-    if (this.champion !== null) {
-      if (this.episode === null || !this.episode.step()) {
-        this.episode = this.environment.createEpisode(this.champion);
-        this.episode.step();
-        this.trail = [];
-      }
-    }
-
+  /** The empty track, shown before the first generation has run. */
+  drawIdle(): void {
     const { ctx } = this;
     clearPlate(ctx, this.width, this.height);
     drawLens(ctx, LENS_CX, LENS_CY, LENS_R);
     ctx.save();
     ctx.beginPath();
-    ctx.arc(LENS_CX, LENS_CY, LENS_R - 14, 0, Math.PI * 2);
+    ctx.arc(LENS_CX, LENS_CY, LENS_R - LENS_CLIP_INSET, 0, Math.PI * 2);
     ctx.clip();
-    const side = (LENS_R - 14) * 2 * 0.94;
+    const side = (LENS_R - LENS_CLIP_INSET) * 2 * 0.94;
+    this.drawTrack(LENS_CX - side / 2, LENS_CY - side / 2, side);
+    ctx.restore();
+    annotate(ctx, LENS_CX, LENS_CY, LENS_R, Math.PI / 2, "champion · median · worst", MOSS);
+    annotate(ctx, LENS_CX, LENS_CY, LENS_R, -Math.PI / 2, "track", INK);
+  }
+
+  draw(frame: TrackRunnerFrame): void {
+    const { ctx } = this;
+    clearPlate(ctx, this.width, this.height);
+    drawLens(ctx, LENS_CX, LENS_CY, LENS_R);
+    ctx.save();
+    ctx.beginPath();
+    ctx.arc(LENS_CX, LENS_CY, LENS_R - LENS_CLIP_INSET, 0, Math.PI * 2);
+    ctx.clip();
+    const side = (LENS_R - LENS_CLIP_INSET) * 2 * 0.94;
     const ox = LENS_CX - side / 2;
     const oy = LENS_CY - side / 2;
+    this.drawTrack(ox, oy, side);
+
+    // Oldest crash markers first, so this round's fresh ones paint on top of
+    // fading older ones rather than under them.
+    [...frame.crashMarkers]
+      .sort((a, b) => b.roundsAgo - a.roundsAgo)
+      .forEach((marker) => {
+        const alpha = 0.55 * (1 - marker.roundsAgo / (CRASH_MARKER_ROUNDS + 1));
+        dot(ctx, ox + marker.x * side, oy + marker.y * side, CRASH_MARKER_RADIUS, `rgba(178,58,42,${alpha})`);
+      });
+
+    // Worst, then median, then champion — so the champion always paints on
+    // top of the other two rather than being occluded by them.
+    const drawOrder: readonly Role[] = ["worst", "median", "champion"];
+    for (const role of drawOrder) {
+      const member = frame.members.find((m) => m.role === role);
+      if (member !== undefined) this.drawMember(ox, oy, side, member);
+    }
+    ctx.restore();
+
+    annotate(ctx, LENS_CX, LENS_CY, LENS_R, Math.PI / 2, "champion · median · worst", MOSS);
+    annotate(ctx, LENS_CX, LENS_CY, LENS_R, -Math.PI / 2, frame.status, INK);
+    fitnessInset(ctx, frame.history, "fig. a — fitness", true);
+  }
+
+  /** The ring itself: inner/outer walls and radial spokes, shared by idle and live frames. */
+  private drawTrack(ox: number, oy: number, side: number): void {
+    const { ctx } = this;
     const geo = this.environment.geometry;
     const cx = ox + geo.center * side;
     const cy = oy + geo.center * side;
@@ -373,134 +328,19 @@ export class TrackRunnerView implements EnvironmentView {
       ctx.lineTo(cx + Math.cos(angle) * r2, cy + Math.sin(angle) * r2);
       ctx.stroke();
     }
-    if (this.episode !== null) {
-      const snap = this.episode.snapshot;
-      this.trail.push({ x: snap.x, y: snap.y });
-      if (this.trail.length > 300) this.trail.shift();
-      this.trail.forEach((t, i) => {
-        const alpha = (i / this.trail.length) * 0.4;
-        dot(ctx, ox + t.x * side, oy + t.y * side, 1.8, `rgba(74,124,89,${alpha})`);
-      });
-      inkAgent(ctx, ox + snap.x * side, oy + snap.y * side, snap.heading, MOSS);
-    }
-    ctx.restore();
-
-    annotate(ctx, LENS_CX, LENS_CY, LENS_R, Math.PI / 2, "car", MOSS);
-    annotate(ctx, LENS_CX, LENS_CY, LENS_R, -Math.PI / 2, "track", INK);
-    fitnessInset(ctx, this.history);
-  }
-}
-
-/** XOR: the evolved network's wiring diagram and live truth table. */
-export class XorView implements EnvironmentView {
-  private best: Network | null = null;
-  private readonly history: PopulationStats[] = [];
-
-  constructor(
-    private readonly ctx: CanvasRenderingContext2D,
-    private readonly width: number,
-    private readonly height: number,
-  ) {}
-
-  onGeneration(result: GenerationResult): void {
-    this.best = result.best as Network;
-    this.history.push(result.stats);
-    if (this.history.length > 400) this.history.shift();
   }
 
-  animate(): void {
+  /** One role: a fading trail plus the car, coloured by {@link roleColor}. */
+  private drawMember(ox: number, oy: number, side: number, member: TrackRunnerMemberFrame): void {
     const { ctx } = this;
-    clearPlate(ctx, this.width, this.height);
-    drawLens(ctx, LENS_CX, LENS_CY, LENS_R);
-    ctx.save();
-    ctx.beginPath();
-    ctx.arc(LENS_CX, LENS_CY, LENS_R - 14, 0, Math.PI * 2);
-    ctx.clip();
-    if (this.best !== null) {
-      drawXorNetwork(ctx, this.best, LENS_CX - 150, LENS_CY - 150, 300, 210);
-    }
-    drawXorTruthTable(ctx, this.best, LENS_CX - 70, LENS_CY + 76, 140, 90);
-    ctx.restore();
-
-    annotate(ctx, LENS_CX, LENS_CY, LENS_R, Math.PI + 0.6, "network", MOSS);
-    annotate(ctx, LENS_CX, LENS_CY, LENS_R, -0.6, "truth table", AMBER);
-    this.drawCasesSolved(ctx);
-    fitnessInset(ctx, this.history);
+    const trailRgb = roleTrailRgb(member.role);
+    const trailAlpha = member.role === "champion" ? 0.4 : 0.25;
+    member.trail.forEach((t, i) => {
+      const alpha = (i / member.trail.length) * trailAlpha;
+      dot(ctx, ox + t.x * side, oy + t.y * side, 1.8, `rgba(${trailRgb},${alpha})`);
+    });
+    inkAgent(ctx, ox + member.x * side, oy + member.y * side, member.heading, roleColor(member.role));
   }
-
-  /**
-   * A prominent "cases solved n/4" badge: raw fitness asymptotes (sigmoid never
-   * outputs exactly 0/1), so a genuinely correct network can read "3.8 / 4" and
-   * look unfinished. This flips to 4/4 the instant every case is actually right.
-   */
-  private drawCasesSolved(ctx: CanvasRenderingContext2D): void {
-    let solved = 0;
-    if (this.best !== null) {
-      for (const { input, target } of XOR_CASES) {
-        const output = this.best.feedForward(input)[0] as number;
-        if ((output >= 0.5 ? 1 : 0) === target) solved++;
-      }
-    }
-    const allSolved = solved === XOR_CASES.length;
-    ctx.font = "600 13px 'JetBrains Mono', ui-monospace, monospace";
-    ctx.textAlign = "center";
-    ctx.fillStyle = allSolved ? MOSS : INK;
-    ctx.fillText(`cases solved: ${solved} / ${XOR_CASES.length}${allSolved ? "  ✓" : ""}`, LENS_CX, LENS_CY - LENS_R + 26);
-    ctx.textAlign = "left";
-  }
-}
-
-function drawXorNetwork(ctx: CanvasRenderingContext2D, network: Network, x: number, y: number, w: number, h: number): void {
-  const { layerSizes, layers, weights } = network.inspect();
-  const positions = layerSizes.map((size, li) => {
-    const colX = x + (w / (layerSizes.length - 1)) * li;
-    return Array.from({ length: size }, (_, i) => ({ x: colX, y: y + (h / (size + 1)) * (i + 1) }));
-  });
-  for (let li = 0; li < layers.length; li++) {
-    const layer = layers[li];
-    if (layer === undefined) continue;
-    const from = positions[li];
-    const to = positions[li + 1];
-    if (from === undefined || to === undefined) continue;
-    for (let o = 0; o < layer.outputs; o++) {
-      for (let inp = 0; inp < layer.inputs; inp++) {
-        const w_ = weights[layer.weightOffset + o * layer.inputs + inp] as number;
-        const magnitude = Math.min(1, Math.abs(w_) / 2);
-        ctx.strokeStyle = w_ >= 0 ? `rgba(74,124,89,${0.12 + magnitude * 0.6})` : `rgba(201,161,90,${0.12 + magnitude * 0.6})`;
-        ctx.lineWidth = 0.6 + magnitude * 1.8;
-        const source = from[inp];
-        const target = to[o];
-        if (source === undefined || target === undefined) continue;
-        ctx.beginPath();
-        ctx.moveTo(source.x, source.y);
-        ctx.lineTo(target.x, target.y);
-        ctx.stroke();
-      }
-    }
-  }
-  for (const column of positions) {
-    for (const point of column) dot(ctx, point.x, point.y, 5, INK);
-  }
-}
-
-function drawXorTruthTable(ctx: CanvasRenderingContext2D, best: Network | null, x: number, y: number, w: number, h: number): void {
-  const cellW = w / 2;
-  const cellH = h / 2;
-  ctx.font = "9px 'JetBrains Mono', ui-monospace, monospace";
-  XOR_CASES.forEach(({ input, target }, i) => {
-    const col = i % 2;
-    const row = Math.floor(i / 2);
-    const cx0 = x + col * cellW;
-    const cy0 = y + row * cellH;
-    const output = best?.feedForward(input)[0] ?? null;
-    const correct = output !== null && Math.round(output) === target;
-    ctx.fillStyle = output === null ? "rgba(28,27,23,0.08)" : correct ? "rgba(74,124,89,0.22)" : "rgba(201,161,90,0.22)";
-    ctx.fillRect(cx0, cy0, cellW - 3, cellH - 3);
-    ctx.strokeStyle = "rgba(28,27,23,0.3)";
-    ctx.strokeRect(cx0 + 0.5, cy0 + 0.5, cellW - 3, cellH - 3);
-    ctx.fillStyle = INK;
-    ctx.fillText(`${input[0]},${input[1]} → ${output === null ? "?" : output.toFixed(2)}`, cx0 + 6, cy0 + cellH / 2 + 3);
-  });
 }
 
 /**
@@ -513,6 +353,7 @@ function drawXorTruthTable(ctx: CanvasRenderingContext2D, best: Network | null, 
  */
 export class PredatorPreyView {
   private readonly cx = LENS_CX;
+  /** Deliberately not `LENS_CY` (380): this plate's lens sits lower, leaving room for the CIAO inset caption above the trail. */
   private readonly cy = 400;
   private readonly trail: { px: number; py: number; ex: number; ey: number }[] = [];
 
@@ -539,9 +380,9 @@ export class PredatorPreyView {
     drawLens(ctx, cx, cy, LENS_R);
     ctx.save();
     ctx.beginPath();
-    ctx.arc(cx, cy, LENS_R - 14, 0, Math.PI * 2);
+    ctx.arc(cx, cy, LENS_R - LENS_CLIP_INSET, 0, Math.PI * 2);
     ctx.clip();
-    const side = (LENS_R - 14) * 2 * 0.92;
+    const side = (LENS_R - LENS_CLIP_INSET) * 2 * 0.92;
     const ox = cx - side / 2;
     const oy = cy - side / 2;
 
@@ -595,21 +436,43 @@ export class PredatorPreyView {
   }
 }
 
-/**
- * Maze: the same deceptive corridor run twice, side by side — objective
- * fitness on the left, Novelty Search on the right (PRD §10 Tier 2 #7). Driven
- * directly by a dedicated maze `Simulation`, since it advances two independent
- * populations rather than one.
- */
-export class MazeDuoView {
-  private readonly objCenter = { x: 400, y: 400 };
-  private readonly novCenter = { x: 780, y: 400 };
-  private readonly radius = 165;
-  /** Fading trajectory trails, one per lens — cleared whenever that lens starts
-   * a new episode so a restart never draws a line back from the old attempt. */
-  private objTrail: { x: number; y: number }[] = [];
-  private novTrail: { x: number; y: number }[] = [];
+/** One role's position/state for a single rendered frame. */
+export interface MazeMemberFrame {
+  readonly role: Role;
+  readonly x: number;
+  readonly y: number;
+  readonly heading: number;
+  readonly trail: readonly { readonly x: number; readonly y: number }[];
+}
 
+/** Where a role crashed into a wall, aged in rounds so the view can fade it out. */
+export interface MazeCrashMarker {
+  readonly x: number;
+  readonly y: number;
+  readonly roundsAgo: number;
+}
+
+/** Everything `MazeView.draw` needs for one frame — assembled by `MazeSimulation`. */
+export interface MazeFrame {
+  readonly members: readonly MazeMemberFrame[];
+  readonly crashMarkers: readonly MazeCrashMarker[];
+  readonly status: string;
+  readonly history: readonly PopulationStats[];
+}
+
+/**
+ * Maze: the deceptive corridor (PRD §10 Tier 2 #7), run under an ordinary
+ * objective GA. Watches the current generation's three roles (see
+ * {@link Role}) each run the maze once per generation — a pure renderer,
+ * driven directly by `MazeSimulation`. Past crashes persist as fading
+ * markers (see `draw`), so "what it got wrong" stays visible while watching
+ * the population improve.
+ *
+ * `NoveltySearch` also runs on this identical maze as a genuine second
+ * selection paradigm (`--study maze-deception`), but is not part of the
+ * on-screen demo (ADR-016, `.docs/decisions.md`).
+ */
+export class MazeView {
   constructor(
     private readonly ctx: CanvasRenderingContext2D,
     private readonly width: number,
@@ -617,73 +480,48 @@ export class MazeDuoView {
     private readonly environment: MazeEnvironment,
   ) {}
 
-  draw(
-    objSnapshot: MazeSnapshot | null,
-    novSnapshot: MazeSnapshot | null,
-    novArchive: readonly (readonly number[])[],
-    objHistory: readonly PopulationStats[],
-    objEpisodeIsNew: boolean,
-    novEpisodeIsNew: boolean,
-  ): void {
+  /** The empty maze, shown before the first generation has run. */
+  drawIdle(): void {
     const { ctx } = this;
     clearPlate(ctx, this.width, this.height);
-    const { grid, dimensions, goal } = this.environment;
-
-    if (objEpisodeIsNew) this.objTrail = [];
-    if (novEpisodeIsNew) this.novTrail = [];
-    if (objSnapshot !== null) {
-      this.objTrail.push({ x: objSnapshot.x, y: objSnapshot.y });
-      if (this.objTrail.length > 300) this.objTrail.shift();
-    }
-    if (novSnapshot !== null) {
-      this.novTrail.push({ x: novSnapshot.x, y: novSnapshot.y });
-      if (this.novTrail.length > 300) this.novTrail.shift();
-    }
-
-    this.drawMazeLens(this.objCenter, grid, dimensions, goal, objSnapshot, MOSS, null, objSnapshot?.solved ?? false, this.objTrail);
-    this.drawMazeLens(this.novCenter, grid, dimensions, goal, novSnapshot, AMBER, novArchive, novSnapshot?.solved ?? false, this.novTrail);
-
-    ctx.fillStyle = INK;
-    ctx.font = "600 11px 'JetBrains Mono', ui-monospace, monospace";
-    ctx.textAlign = "center";
-    ctx.fillText("OBJECTIVE", this.objCenter.x, this.objCenter.y - this.radius - 20);
-    ctx.fillText("NOVELTY", this.novCenter.x, this.novCenter.y - this.radius - 20);
-    ctx.textAlign = "left";
-
-    drawInsetPanel(ctx, INSET_RECT.x, INSET_RECT.y, INSET_RECT.width, INSET_RECT.height, "fig. a — objective fitness");
-    drawSparkline(
-      ctx,
-      INSET_RECT.x + 8,
-      INSET_RECT.y + 8,
-      INSET_RECT.width - 16,
-      INSET_RECT.height - 16,
-      objHistory.map((h) => h.best),
-      objHistory.map((h) => h.average),
-    );
-  }
-
-  private drawMazeLens(
-    center: { x: number; y: number },
-    walls: readonly (readonly boolean[])[],
-    dims: { cols: number; rows: number },
-    goal: { col: number; row: number },
-    snapshot: MazeSnapshot | null,
-    agentColor: string,
-    scatter: readonly (readonly number[])[] | null,
-    solved: boolean,
-    trail: readonly { x: number; y: number }[],
-  ): void {
-    const { ctx } = this;
-    const { x: cx, y: cy } = center;
-    const radius = this.radius;
-    drawLens(ctx, cx, cy, radius);
     ctx.save();
     ctx.beginPath();
-    ctx.arc(cx, cy, radius - 14, 0, Math.PI * 2);
+    ctx.arc(LENS_CX, LENS_CY, LENS_R - LENS_CLIP_INSET, 0, Math.PI * 2);
     ctx.clip();
-    const side = (radius - 14) * 2;
-    const ox = cx - side / 2;
-    const oy = cy - side / 2;
+    drawLens(ctx, LENS_CX, LENS_CY, LENS_R);
+    const side = (LENS_R - LENS_CLIP_INSET) * 2;
+    this.drawMaze(LENS_CX - side / 2, LENS_CY - side / 2, side, [], []);
+    ctx.restore();
+    annotate(ctx, LENS_CX, LENS_CY, LENS_R, Math.PI / 2, "champion · median · worst", MOSS);
+    annotate(ctx, LENS_CX, LENS_CY, LENS_R, -Math.PI / 2, "maze", INK);
+  }
+
+  draw(frame: MazeFrame): void {
+    const { ctx } = this;
+    clearPlate(ctx, this.width, this.height);
+    drawLens(ctx, LENS_CX, LENS_CY, LENS_R);
+    ctx.save();
+    ctx.beginPath();
+    ctx.arc(LENS_CX, LENS_CY, LENS_R - LENS_CLIP_INSET, 0, Math.PI * 2);
+    ctx.clip();
+    const side = (LENS_R - LENS_CLIP_INSET) * 2;
+    this.drawMaze(LENS_CX - side / 2, LENS_CY - side / 2, side, frame.members, frame.crashMarkers);
+    ctx.restore();
+
+    annotate(ctx, LENS_CX, LENS_CY, LENS_R, Math.PI / 2, "champion · median · worst", MOSS);
+    annotate(ctx, LENS_CX, LENS_CY, LENS_R, -Math.PI / 2, frame.status, INK);
+    fitnessInset(ctx, frame.history, "fig. a — objective fitness", true);
+  }
+
+  private drawMaze(
+    ox: number,
+    oy: number,
+    side: number,
+    members: readonly MazeMemberFrame[],
+    crashMarkers: readonly MazeCrashMarker[],
+  ): void {
+    const { ctx } = this;
+    const { grid: walls, dimensions: dims, goal } = this.environment;
     const cellW = side / dims.cols;
     const cellH = side / dims.rows;
 
@@ -704,140 +542,27 @@ export class MazeDuoView {
     ctx.arc(gx, gy, 6, 0, Math.PI * 2);
     ctx.stroke();
 
-    if (scatter !== null) {
-      scatter.forEach((behaviour, i) => {
-        const bx = behaviour[0] ?? 0;
-        const by = behaviour[1] ?? 0;
-        dot(ctx, ox + bx * side, oy + by * side, 2, `rgba(201,161,90,${0.15 + (i / scatter.length) * 0.4})`);
+    // Oldest crash markers first, so this round's fresh ones paint on top.
+    [...crashMarkers]
+      .sort((a, b) => b.roundsAgo - a.roundsAgo)
+      .forEach((marker) => {
+        const alpha = 0.55 * (1 - marker.roundsAgo / (CRASH_MARKER_ROUNDS + 1));
+        dot(ctx, ox + (marker.x / dims.cols) * side, oy + (marker.y / dims.rows) * side, CRASH_MARKER_RADIUS, `rgba(178,58,42,${alpha})`);
       });
-    }
-    trail.forEach((t, i) => {
-      const alpha = (i / trail.length) * 0.45;
-      dot(ctx, ox + (t.x / dims.cols) * side, oy + (t.y / dims.rows) * side, 1.8, `rgba(28,27,23,${alpha})`);
-    });
-    if (snapshot !== null) {
-      const px = ox + (snapshot.x / dims.cols) * side;
-      const py = oy + (snapshot.y / dims.rows) * side;
-      inkAgent(ctx, px, py, snapshot.heading, agentColor);
-    }
-    ctx.restore();
 
-    if (solved) {
-      ctx.fillStyle = INK;
-      ctx.font = "600 11px 'JetBrains Mono', ui-monospace, monospace";
-      ctx.textAlign = "center";
-      ctx.fillText("SOLVED", cx, cy + radius - 16);
-      ctx.textAlign = "left";
+    // Worst, then median, then champion — so the champion always paints on
+    // top of the other two rather than being occluded by them.
+    const drawOrder: readonly Role[] = ["worst", "median", "champion"];
+    for (const role of drawOrder) {
+      const member = members.find((m) => m.role === role);
+      if (member === undefined) continue;
+      member.trail.forEach((t, i) => {
+        const alpha = (i / member.trail.length) * (member.role === "champion" ? 0.45 : 0.28);
+        dot(ctx, ox + (t.x / dims.cols) * side, oy + (t.y / dims.rows) * side, 1.8, `rgba(${roleTrailRgb(member.role)},${alpha})`);
+      });
+      const px = ox + (member.x / dims.cols) * side;
+      const py = oy + (member.y / dims.rows) * side;
+      inkAgent(ctx, px, py, member.heading, roleColor(member.role));
     }
   }
-}
-
-/**
- * MAP-Elites archive: the current best hopper animated live, and a heat map
- * over (stride length, duty factor) inset — the illuminated gallery of viable
- * gaits (PRD §10 Tier 2 #8; RESEARCH.md §3). Driven directly by
- * `MapElitesSimulation`.
- */
-export class GaitArchiveView {
-  constructor(
-    private readonly ctx: CanvasRenderingContext2D,
-    private readonly width: number,
-    private readonly height: number,
-    private readonly bins: number,
-  ) {}
-
-  draw(snapshot: GaitSnapshot | null, entries: readonly ArchiveEntry[]): void {
-    const { ctx } = this;
-    clearPlate(ctx, this.width, this.height);
-    drawLens(ctx, LENS_CX, LENS_CY, LENS_R);
-    ctx.save();
-    ctx.beginPath();
-    ctx.arc(LENS_CX, LENS_CY, LENS_R - 14, 0, Math.PI * 2);
-    ctx.clip();
-    const groundY = LENS_CY + 70;
-    const pxPerUnit = 90;
-    const snap = snapshot ?? { x: 0, y: 1, stance: false };
-    ctx.strokeStyle = "rgba(28,27,23,0.3)";
-    ctx.beginPath();
-    ctx.moveTo(LENS_CX - LENS_R, groundY);
-    ctx.lineTo(LENS_CX + LENS_R, groundY);
-    ctx.stroke();
-    ctx.strokeStyle = "rgba(28,27,23,0.15)";
-    for (let i = Math.floor(snap.x - 3); i <= Math.ceil(snap.x + 3); i++) {
-      const tx = LENS_CX + (i - snap.x) * pxPerUnit;
-      ctx.beginPath();
-      ctx.moveTo(tx, groundY - 4);
-      ctx.lineTo(tx, groundY + 4);
-      ctx.stroke();
-    }
-    const bodyY = groundY - snap.y * pxPerUnit;
-    if (snap.stance) {
-      ctx.strokeStyle = MOSS;
-      ctx.lineWidth = 3;
-      ctx.beginPath();
-      ctx.moveTo(LENS_CX, bodyY);
-      ctx.lineTo(LENS_CX, groundY);
-      ctx.stroke();
-    }
-    dot(ctx, LENS_CX, bodyY, 7, snap.stance ? MOSS : AMBER);
-    ctx.restore();
-
-    annotate(ctx, LENS_CX, LENS_CY, LENS_R, Math.PI / 2, "hopper", MOSS);
-
-    drawInsetPanel(
-      ctx,
-      INSET_RECT.x,
-      INSET_RECT.y,
-      INSET_RECT.width,
-      INSET_RECT.height,
-      "fig. b — archive (stride × duty)",
-    );
-    const cellW = INSET_RECT.width / this.bins;
-    const cellH = INSET_RECT.height / this.bins;
-    let maxFitness = 0;
-    for (const entry of entries) maxFitness = Math.max(maxFitness, entry.genome.fitness);
-    for (const entry of entries) {
-      const t = maxFitness > 0 ? entry.genome.fitness / maxFitness : 0;
-      const [r, g, b] = mix([247, 243, 232], [74, 124, 89], t);
-      ctx.fillStyle = `rgb(${r},${g},${b})`;
-      const strideBin = entry.cell[0] ?? 0;
-      const dutyBin = entry.cell[1] ?? 0;
-      ctx.fillRect(
-        INSET_RECT.x + strideBin * cellW,
-        INSET_RECT.y + (this.bins - 1 - dutyBin) * cellH,
-        cellW + 0.5,
-        cellH + 0.5,
-      );
-    }
-  }
-}
-
-/** Precomputes the Rastrigin surface as a heat map into an offscreen canvas. */
-function renderRastriginSurface(bounds: readonly [number, number]): HTMLCanvasElement {
-  const size = 540;
-  const canvas = document.createElement("canvas");
-  canvas.width = size;
-  canvas.height = size;
-  const ctx = canvas.getContext("2d");
-  if (ctx === null) throw new Error("2D context unavailable");
-
-  const image = ctx.createImageData(size, size);
-  const [min, max] = bounds;
-  // Rastrigin's approximate max over this domain, for normalisation.
-  const peak = 80;
-  for (let py = 0; py < size; py++) {
-    for (let px = 0; px < size; px++) {
-      const x = min + (px / size) * (max - min);
-      const y = max - (py / size) * (max - min);
-      const t = Math.min(1, rastrigin([x, y]) / peak);
-      const offset = (py * size + px) * 4;
-      const [r, g, b] = mix([247, 243, 232], [201, 161, 90], t * 0.5);
-      image.data[offset] = r;
-      image.data[offset + 1] = g;
-      image.data[offset + 2] = b;
-      image.data[offset + 3] = 255;
-    }
-  }
-  ctx.putImageData(image, 0, 0);
-  return canvas;
 }

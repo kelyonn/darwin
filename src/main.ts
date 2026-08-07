@@ -3,49 +3,85 @@ import { GenerationalGA } from "./core/ga.js";
 import { Network } from "./core/network.js";
 import { Runner } from "./app/runner.js";
 import { CoevolutionDriver, dominanceCount, type CoevolutionState } from "./search/coevolution.js";
-import { NoveltySearch } from "./search/novelty.js";
-import { MapElites } from "./search/mapElites.js";
 import { CREAM } from "./render/palette.js";
 import {
   type EnvironmentView,
   WeaselView,
-  LandscapeView,
   TspView,
-  CartPoleView,
   TrackRunnerView,
-  XorView,
+  type TrackRunnerCrashMarker,
   PredatorPreyView,
-  MazeDuoView,
-  GaitArchiveView,
+  MazeView,
+  type MazeCrashMarker,
+  type Role,
 } from "./render/views.js";
 import { WeaselEnvironment } from "./environments/weasel.js";
-import { LandscapeEnvironment } from "./environments/landscape.js";
 import { TspEnvironment } from "./environments/tsp.js";
-import { CartPoleEnvironment } from "./environments/cartpole.js";
-import { TrackRunnerEnvironment, CHECKPOINTS, CHECKPOINT_REWARD } from "./environments/trackrunner.js";
-import { MazeEnvironment, type LiveMazeEpisode, type MazeSnapshot } from "./environments/maze.js";
-import { GaitEnvironment, type LiveGaitEpisode } from "./environments/gait.js";
-import { XorEnvironment, XOR_CASES } from "./environments/xor.js";
+import {
+  TrackRunnerEnvironment,
+  EPISODE_STEPS as TRACK_EPISODE_STEPS,
+  type LiveTrackEpisode,
+} from "./environments/trackrunner.js";
+import {
+  MazeEnvironment,
+  EPISODE_STEPS as MAZE_EPISODE_STEPS,
+  type LiveMazeEpisode,
+} from "./environments/maze.js";
 import {
   PredatorPreyEnvironment,
   type LivePredatorPreyEpisode,
 } from "./environments/predatorPrey.js";
+import {
+  WEASEL_TARGET,
+  WEASEL_PRESET,
+  TSP_PRESET,
+  TRACKRUNNER_PRESET,
+  MAZE_PRESET,
+  PREDATOR_PREY_PRESET,
+} from "./app/presets.js";
 import type { Genome } from "./core/genome.js";
+import type { PopulationStats } from "./core/stats.js";
+import { MAX_FITNESS_HISTORY, CRASH_MARKER_ROUNDS } from "./render/layout.js";
 
 /**
  * Entry point (PRD §3): a specimen-plate environment selector driving one
  * representation-blind engine. Each tab wires a different Environment +
  * genome type through the same core, proving the decoupling on screen. Most
  * tabs use the single-population {@link GenerationalGA}; predator–prey uses
- * the two-population {@link CoevolutionDriver}; gait uses {@link MapElites};
- * maze runs both a {@link GenerationalGA} and a {@link NoveltySearch} side by
- * side. All satisfy the same {@link Simulation} shape so the render loop is
- * oblivious to which is running.
+ * the two-population {@link CoevolutionDriver}. All satisfy the same
+ * {@link Simulation} shape so the render loop is oblivious to which is
+ * running.
+ *
+ * Five plates ship in this demo (Predator–Prey, Weasel, TSP, Track Runner,
+ * Maze) — down from an earlier nine. Landscape, Cart-pole, Gait, and XOR were
+ * cut from the *demo* only: their environments, presets, headless studies,
+ * bench rows, and tests all remain (see `.docs/decisions.md`) — Landscape is
+ * one of two legs of the cross-representation study (ADR-013), Gait is the
+ * MAP-Elites proof, and XOR/Cart-pole back `runBench`'s allocation-vs-
+ * evaluation comparison. Only their on-screen plates and the third
+ * `Simulation` adapter kind (`MapElitesSimulation`, Gait's only user) were
+ * removed from `main.ts`.
  */
 
-const SEED = 42;
+/**
+ * Mutable, not `const`: every plate's `build(stage)` reads `SEED` at call
+ * time (a closure over this binding, not its value), so re-seeding just means
+ * assigning here and calling `load(activeIndex)` again — no plate needs to
+ * know re-seeding exists (§4.4, `.docs/remediation-plan.md`).
+ */
+let SEED = 42;
+const DEFAULT_SEED = SEED;
 const STAGE_WIDTH = 1180;
 const STAGE_HEIGHT = 740;
+/**
+ * Rendered frames to hold the final state of a completed round before the
+ * next generation's round begins (round-paced plates only). Early rounds can
+ * end within ~20 ticks — most of a fresh, unevolved cohort crashing almost
+ * immediately — so without a deliberate pause the outcome would flicker past
+ * unreadably. Holding it briefly is what makes each generation's result
+ * legible, especially the crash positions and the outcome counter.
+ */
+const ROUND_HOLD_FRAMES = 30;
 
 /** The plate's top-right generation/metric readout. */
 interface Readout {
@@ -58,24 +94,50 @@ interface Readout {
 }
 
 /**
- * One runnable environment, decoupled from how it evolves. `advance` evolves a
- * generation and refreshes `readout`; `frame` draws per-frame animation onto
- * the shared 1180×740 stage.
+ * How a plate's `advance()` is triggered, relative to the render loop.
+ *
+ * `"frames"` (most plates): a generation evolves every `evolveInterval`
+ * rendered frames, independent of anything the live animation is doing —
+ * fine for plates whose live episode is illustrative, not the point.
+ *
+ * `"round"` (Track Runner, Maze): a generation evolves once every cohort
+ * member currently animating has ended (or the tick cap was reached) — see
+ * `roundComplete()` on {@link Simulation}. This keeps the generation counter
+ * and what's on screen in lock-step, which matters when the animation *is*
+ * the evidence a population is learning (§B2, `.docs/remediation-plan.md`).
+ */
+type Pacing = { readonly kind: "frames"; readonly evolveInterval: number } | { readonly kind: "round" };
+
+/**
+ * One runnable environment, decoupled from how it evolves and how it's
+ * watched. `advance` evolves a generation and refreshes `readout` (for
+ * round-paced plates, it also starts the next round). `tick` advances the
+ * live simulation by one step with no drawing; `draw` renders current state
+ * with no stepping — split so the render loop can run several ticks per
+ * redraw at higher speeds without repainting several times.
  */
 interface Simulation {
-  /** Frames between evolved generations (episodic envs evolve less often). */
-  readonly evolveInterval: number;
+  readonly pacing: Pacing;
   readonly readout: Readout;
   advance(): void;
-  frame(): void;
+  tick(): void;
+  draw(): void;
+  /** Round-paced plates only: true once the current round has ended. */
+  roundComplete?(): boolean;
 }
 
-/** Adapts a single-population {@link Runner} + {@link EnvironmentView} to {@link Simulation}. */
+/**
+ * Adapts a single-population {@link Runner} + {@link EnvironmentView} to
+ * {@link Simulation}. Always frame-paced: the views it wires (Weasel, TSP)
+ * have no live episode to step between generations, so `tick` is a no-op and
+ * `draw` is where all the drawing already lived.
+ */
 class GaSimulation implements Simulation {
+  readonly pacing: Pacing;
   readout: Readout = { generation: 0, metricLabel: "fitness", metricValue: "0" };
 
   constructor(
-    readonly evolveInterval: number,
+    evolveInterval: number,
     private readonly runner: Runner,
     private readonly view: EnvironmentView,
     private readonly metricLabel: string,
@@ -86,7 +148,9 @@ class GaSimulation implements Simulation {
      * clearer progress signal than a sigmoid-asymptoting fitness value.
      */
     private readonly secondaryMetric?: (champion: Genome) => { label: string; value: string },
-  ) {}
+  ) {
+    this.pacing = { kind: "frames", evolveInterval };
+  }
 
   advance(): void {
     const result = this.runner.advance();
@@ -100,7 +164,12 @@ class GaSimulation implements Simulation {
     };
   }
 
-  frame(): void {
+  tick(): void {
+    // Nothing to step between generations — the wired views (Weasel, TSP)
+    // draw directly from the last evolved generation's state.
+  }
+
+  draw(): void {
     this.view.animate();
   }
 }
@@ -112,6 +181,7 @@ class GaSimulation implements Simulation {
  * animates the champion fox against the champion rabbit.
  */
 class CoevolutionSimulation implements Simulation {
+  readonly pacing: Pacing;
   readout: Readout = {
     generation: 0,
     metricLabel: "capture rate",
@@ -126,12 +196,13 @@ class CoevolutionSimulation implements Simulation {
   private readonly ciao: number[][] = [];
 
   constructor(
-    readonly evolveInterval: number,
+    evolveInterval: number,
     private readonly environment: PredatorPreyEnvironment,
     private readonly driver: CoevolutionDriver,
     initialState: CoevolutionState,
     private readonly view: PredatorPreyView,
   ) {
+    this.pacing = { kind: "frames", evolveInterval };
     this.state = initialState;
   }
 
@@ -152,11 +223,18 @@ class CoevolutionSimulation implements Simulation {
     const ciaoRow = this.preyChampions.map((prey) => this.environment.compete(championPredator, prey).predatorScore);
     this.ciao.push(ciaoRow);
 
-    // Dominance tournament: how many ancestral prey champions this predator would
-    // catch. Because coevolutionary fitness is relative and unreadable across
-    // generations (RESEARCH.md §4.5), this absolute count is the honest progress
-    // signal the raw fitness cannot give — read straight from the CIAO row.
+    // Dominance tournament: what fraction of ancestral prey champions this
+    // predator would catch. Because coevolutionary fitness is relative and
+    // unreadable across generations (RESEARCH.md §4.5), this is one of the few
+    // absolute progress signals available — but the *raw count* is not it: it
+    // rises mechanically every generation just because the archive it's
+    // measured against keeps growing, even while the arms race is purely
+    // cycling. Measured (ADR-012, coevolution-progress study): the raw count
+    // climbed from 19 to 67 across 200 generations on one seed while the
+    // *fraction* fell from 76% to 34% over the same run. The fraction is the
+    // number that can actually report bad news; lead with it.
     const dominated = dominanceCount(ciaoRow);
+    const dominanceFraction = ciaoRow.length > 0 ? dominated / ciaoRow.length : 0;
 
     this.episode = this.environment.createEpisode(championPredator, championPrey);
     this.state = next;
@@ -171,149 +249,317 @@ class CoevolutionSimulation implements Simulation {
       },
       tertiary: {
         label: "dominates",
-        value: `${dominated} / ${this.preyChampions.length} ancestors`,
+        value: `${Math.round(dominanceFraction * 100)}% (${dominated}/${this.preyChampions.length} ancestors)`,
       },
     };
   }
 
-  frame(): void {
-    if (this.championPredator === null || this.championPrey === null) {
-      this.view.drawIdle();
-      return;
-    }
+  tick(): void {
+    if (this.championPredator === null || this.championPrey === null) return;
     if (this.episode === null || !this.episode.step()) {
       this.episode = this.environment.createEpisode(this.championPredator, this.championPrey);
       this.episode.step();
+    }
+  }
+
+  draw(): void {
+    if (this.episode === null) {
+      this.view.drawIdle();
+      return;
     }
     this.view.draw(this.episode.snapshot, this.ciao);
   }
 }
 
 /**
- * Adapts {@link MapElites} to {@link Simulation}. Unlike a generational
- * population, the archive only grows and improves — there is no "generation" of
- * evaluated genomes to read stats from, so the readout reports archive
- * coverage and the best distance found instead, and the champion is animated
- * live in the lens.
+ * Track Runner and Maze each animate all three {@link Role}s from the
+ * current generation simultaneously, not just the champion — a lone champion
+ * is already good within a few generations, so watching it alone shows *one*
+ * lineage improving but not the population's actual spread narrowing.
+ * Champion, median, and worst together make that spread visible: early on
+ * all three struggle close together; later the champion pulls ahead while
+ * median and worst still fail; eventually even the weak end of the
+ * distribution starts succeeding (ADR-018, `.docs/decisions.md`).
  */
-class MapElitesSimulation implements Simulation {
-  readout: Readout;
-  private best: Network | null = null;
-  private episode: LiveGaitEpisode | null = null;
-  private generation = 0;
+const ROLES: readonly Role[] = ["champion", "median", "worst"];
 
-  constructor(
-    readonly evolveInterval: number,
-    private readonly elites: MapElites,
-    private readonly environment: GaitEnvironment,
-    private readonly view: GaitArchiveView,
-    private readonly bins: number,
-  ) {
-    this.readout = { generation: 0, metricLabel: "archive cells", metricValue: `0 / ${bins * bins}`, secondary: { label: "best distance", value: "0.00" } };
+/** Picks the fittest, a middle-ranked, and the least-fit member of a scored population — the three {@link Role}s. */
+function pickRoles<T>(population: readonly T[], scoreOf: (item: T) => number): ReadonlyMap<Role, T> {
+  const ranked = [...population].sort((a, b) => scoreOf(b) - scoreOf(a));
+  const champion = ranked[0];
+  const worst = ranked[ranked.length - 1];
+  const median = ranked[Math.floor((ranked.length - 1) / 2)];
+  if (champion === undefined || worst === undefined || median === undefined) {
+    throw new Error("cannot pick roles from an empty population");
   }
+  return new Map<Role, T>([
+    ["champion", champion],
+    ["median", median],
+    ["worst", worst],
+  ]);
+}
 
-  advance(): void {
-    this.elites.step(this.environment.spawn, this.environment.evaluate);
-    this.generation++;
-    let best = null;
-    for (const entry of this.elites.entries) {
-      if (best === null || entry.genome.fitness > best.genome.fitness) best = entry;
-    }
-    if (best !== null) {
-      this.best = best.genome as Network;
-      this.episode = this.environment.createEpisode(this.best);
-    }
-    this.readout = {
-      generation: this.generation,
-      metricLabel: "archive cells",
-      metricValue: `${this.elites.size} / ${this.bins * this.bins}`,
-      secondary: { label: "best distance", value: (best?.genome.fitness ?? 0).toFixed(2) },
-    };
-  }
-
-  frame(): void {
-    if (this.best !== null) {
-      if (this.episode === null || !this.episode.step()) {
-        this.episode = this.environment.createEpisode(this.best);
-        this.episode.step();
-      }
-    }
-    this.view.draw(this.episode?.snapshot ?? null, this.elites.entries);
-  }
+/** One role's live state within the current round. */
+interface MazeRoleState {
+  readonly role: Role;
+  readonly episode: LiveMazeEpisode;
+  readonly trail: { x: number; y: number }[];
+  ticks: number;
+  outcome: "running" | "crashed" | "solved" | "timedOut";
 }
 
 /**
- * Runs the deceptive maze (PRD §10 Tier 2 #7) under two search paradigms at
- * once, on the identical topology: an ordinary {@link GenerationalGA} (gets
- * stuck on the dead-end pocket) and {@link NoveltySearch} (ignores the goal and
- * explores instead). Both populations advance together each generation.
+ * Runs the deceptive maze (PRD §10 Tier 2 #7) under an ordinary
+ * {@link GenerationalGA}, which has to learn to avoid the two dead-end
+ * pockets. Round-paced: a generation's three roles (see {@link Role}) run to
+ * completion — crash, solve, or the tick cap — before the next generation
+ * starts, so the generation counter and what's on screen always describe the
+ * exact same attempt (the fix that motivated round-pacing to begin with; see
+ * the class doc history in `.docs/decisions.md`, ADR-015). Crash positions
+ * from recent generations persist as fading markers, so "what it got wrong
+ * last time" stays visible while watching the route improve; a "vs.
+ * generation 1" multiplier makes the improvement a plain number, not
+ * something you have to eyeball off the sparkline (ADR-018).
+ *
+ * `NoveltySearch` also runs on this maze — it's a genuine second selection
+ * paradigm proving `SearchStrategy` is swappable with zero engine changes —
+ * but is no longer part of the on-screen demo. It remains fully exercised by
+ * `test/novelty.test.ts` and `--study maze-deception`.
  */
 class MazeSimulation implements Simulation {
+  readonly pacing: Pacing = { kind: "round" };
   readout: Readout = {
     generation: 0,
     metricLabel: "objective fitness",
     metricValue: "0.000",
-    secondary: { label: "novelty archive", value: "0 cells" },
+    secondary: { label: "status", value: "—" },
   };
-  private objBest: Network | null = null;
-  private novBest: Network | null = null;
-  private objEpisode: LiveMazeEpisode | null = null;
-  private novEpisode: LiveMazeEpisode | null = null;
-  private objEpisodeIsNew = false;
-  private novEpisodeIsNew = false;
+  private roles: MazeRoleState[] = [];
+  private crashMarkers: MazeCrashMarker[] = [];
+  private readonly history: PopulationStats[] = [];
+  private baselineFitness: number | null = null;
 
   constructor(
-    readonly evolveInterval: number,
-    private readonly objEnv: MazeEnvironment,
-    private readonly novEnv: MazeEnvironment,
-    private readonly objRunner: Runner,
-    private readonly novelty: NoveltySearch,
-    private novPopulation: Genome[],
-    private readonly view: MazeDuoView,
+    private readonly env: MazeEnvironment,
+    private readonly runner: Runner,
+    private readonly view: MazeView,
   ) {}
 
   advance(): void {
-    const objResult = this.objRunner.advance();
-    this.objBest = objResult.best as Network;
-    this.objEpisode = this.objEnv.createEpisode(this.objBest);
-    this.objEpisodeIsNew = true;
+    const result = this.runner.advance();
+    if (this.baselineFitness === null) this.baselineFitness = result.stats.best;
 
-    const evaluated = this.novPopulation;
-    this.novPopulation = this.novelty.step(evaluated, (g) => this.novEnv.evaluate(g));
-    this.novBest = fittest(evaluated) as Network;
-    this.novEpisode = this.novEnv.createEpisode(this.novBest);
-    this.novEpisodeIsNew = true;
+    this.crashMarkers = this.crashMarkers
+      .map((marker) => ({ ...marker, roundsAgo: marker.roundsAgo + 1 }))
+      .filter((marker) => marker.roundsAgo <= CRASH_MARKER_ROUNDS);
+
+    const picked = pickRoles(result.evaluated, (g) => g.fitness);
+    this.roles = ROLES.map((role) => ({
+      role,
+      episode: this.env.createEpisode(picked.get(role) as Network),
+      trail: [],
+      ticks: 0,
+      outcome: "running" as const,
+    }));
+
+    this.history.push(result.stats);
+    if (this.history.length > MAX_FITNESS_HISTORY) this.history.shift();
 
     this.readout = {
-      generation: objResult.generation,
+      generation: result.generation,
       metricLabel: "objective fitness",
-      metricValue: objResult.stats.best.toFixed(3),
-      secondary: { label: "novelty archive", value: `${this.novelty.exploredBehaviours.length} cells` },
+      metricValue: result.stats.best.toFixed(3),
+      secondary: { label: "status", value: this.statusText() },
+      tertiary: { label: "vs. generation 1", value: improvementText(this.baselineFitness, result.stats.best) },
     };
   }
 
-  frame(): void {
-    let objSnapshot: MazeSnapshot | null = null;
-    let novSnapshot: MazeSnapshot | null = null;
-    if (this.objBest !== null) {
-      if (this.objEpisode === null || !this.objEpisode.step()) {
-        this.objEpisode = this.objEnv.createEpisode(this.objBest);
-        this.objEpisode.step();
-        this.objEpisodeIsNew = true;
+  tick(): void {
+    for (const r of this.roles) {
+      if (r.outcome !== "running") continue;
+      const alive = r.episode.step();
+      r.ticks++;
+      const snap = r.episode.snapshot;
+      r.trail.push({ x: snap.x, y: snap.y });
+      if (snap.solved) {
+        r.outcome = "solved";
+      } else if (!alive) {
+        r.outcome = "crashed";
+        this.crashMarkers.push({ x: snap.x, y: snap.y, roundsAgo: 0 });
+      } else if (r.ticks >= MAZE_EPISODE_STEPS) {
+        r.outcome = "timedOut";
       }
-      objSnapshot = this.objEpisode.snapshot;
     }
-    if (this.novBest !== null) {
-      if (this.novEpisode === null || !this.novEpisode.step()) {
-        this.novEpisode = this.novEnv.createEpisode(this.novBest);
-        this.novEpisode.step();
-        this.novEpisodeIsNew = true;
+    // Updated every tick, not just at round end — see the analogous comment
+    // on TrackRunnerSimulation.tick().
+    this.readout = { ...this.readout, secondary: { label: "status", value: this.statusText() } };
+  }
+
+  draw(): void {
+    if (this.roles.length === 0) {
+      this.view.drawIdle();
+      return;
+    }
+    this.view.draw({
+      members: this.roles.map((r) => ({
+        role: r.role,
+        x: r.episode.snapshot.x,
+        y: r.episode.snapshot.y,
+        heading: r.episode.snapshot.heading,
+        trail: r.trail,
+      })),
+      crashMarkers: this.crashMarkers,
+      status: this.statusText(),
+      history: this.history,
+    });
+  }
+
+  roundComplete(): boolean {
+    return this.roles.every((r) => r.outcome !== "running");
+  }
+
+  private statusText(): string {
+    const champion = this.roles.find((r) => r.role === "champion");
+    if (champion === undefined) return "—";
+    if (champion.outcome === "solved") return "champion reached goal";
+    if (champion.outcome === "crashed") return "champion crashed";
+    if (champion.outcome === "timedOut") return "champion timed out";
+    return "champion exploring";
+  }
+}
+
+/** "1.0×" once a baseline exists, guarding the (near-impossible but not-provably-impossible) zero-baseline case. */
+function improvementText(baseline: number | null, current: number): string {
+  if (baseline === null || baseline <= 0) return "—";
+  return `${(current / baseline).toFixed(1)}×`;
+}
+
+/** One role's live state within the current round. */
+interface TrackRoleState {
+  readonly role: Role;
+  readonly episode: LiveTrackEpisode;
+  readonly trail: { x: number; y: number }[];
+  ticks: number;
+  outcome: "running" | "crashed" | "finished";
+}
+
+/**
+ * Adapts {@link TrackRunnerEnvironment} to {@link Simulation}, round-paced: a
+ * generation's three roles (see {@link Role}) each run to completion — crash
+ * or survive to `EPISODE_STEPS`, the same budget `evaluate` scores against —
+ * before the next generation starts, so what's on screen always corresponds
+ * exactly to one real generation, never a stale mid-flight snapshot from
+ * generations ago (measured, before this fix: the live episode was rebuilt
+ * every `evolveInterval` frames regardless of outcome, showing at most ~10
+ * ticks — a few percent of a lap — per attempt, forever). Crash positions
+ * from recent generations persist as fading markers, so "what it got wrong
+ * last time" stays visible while watching the population improve; a "vs.
+ * generation 1" multiplier makes the improvement a plain number, not
+ * something you have to eyeball off the sparkline (ADR-018,
+ * `.docs/decisions.md`).
+ */
+class TrackRunnerSimulation implements Simulation {
+  readonly pacing: Pacing = { kind: "round" };
+  readout: Readout = {
+    generation: 0,
+    metricLabel: "fitness",
+    metricValue: "0.00",
+    secondary: { label: "status", value: "—" },
+  };
+  private roles: TrackRoleState[] = [];
+  private crashMarkers: TrackRunnerCrashMarker[] = [];
+  private readonly history: PopulationStats[] = [];
+  private baselineFitness: number | null = null;
+
+  constructor(
+    private readonly runner: Runner,
+    private readonly environment: TrackRunnerEnvironment,
+    private readonly view: TrackRunnerView,
+  ) {}
+
+  advance(): void {
+    const result = this.runner.advance();
+    if (this.baselineFitness === null) this.baselineFitness = result.stats.best;
+
+    this.crashMarkers = this.crashMarkers
+      .map((marker) => ({ ...marker, roundsAgo: marker.roundsAgo + 1 }))
+      .filter((marker) => marker.roundsAgo <= CRASH_MARKER_ROUNDS);
+
+    const picked = pickRoles(result.evaluated, (g) => g.fitness);
+    this.roles = ROLES.map((role) => ({
+      role,
+      episode: this.environment.createEpisode(picked.get(role) as Network),
+      trail: [],
+      ticks: 0,
+      outcome: "running" as const,
+    }));
+
+    this.history.push(result.stats);
+    if (this.history.length > MAX_FITNESS_HISTORY) this.history.shift();
+
+    this.readout = {
+      generation: result.generation,
+      metricLabel: "fitness",
+      metricValue: result.stats.best.toFixed(2),
+      secondary: { label: "status", value: this.statusText() },
+      tertiary: { label: "vs. generation 1", value: improvementText(this.baselineFitness, result.stats.best) },
+    };
+  }
+
+  tick(): void {
+    for (const r of this.roles) {
+      if (r.outcome !== "running") continue;
+      const alive = r.episode.step();
+      r.ticks++;
+      const snap = r.episode.snapshot;
+      r.trail.push({ x: snap.x, y: snap.y });
+      if (!alive) {
+        r.outcome = "crashed";
+        this.crashMarkers.push({ x: snap.x, y: snap.y, roundsAgo: 0 });
+      } else if (r.ticks >= TRACK_EPISODE_STEPS) {
+        r.outcome = "finished";
       }
-      novSnapshot = this.novEpisode.snapshot;
     }
-    this.view.draw(objSnapshot, novSnapshot, this.novelty.exploredBehaviours, this.objRunner.history, this.objEpisodeIsNew, this.novEpisodeIsNew);
-    this.objEpisodeIsNew = false;
-    this.novEpisodeIsNew = false;
+    // Updated every tick, not just at round end, so "completed a lap" is
+    // visible the instant it happens mid-round, not only once per generation.
+    this.readout = { ...this.readout, secondary: { label: "status", value: this.statusText() } };
+  }
+
+  draw(): void {
+    if (this.roles.length === 0) {
+      this.view.drawIdle();
+      return;
+    }
+    this.view.draw({
+      members: this.roles.map((r) => ({
+        role: r.role,
+        x: r.episode.snapshot.x,
+        y: r.episode.snapshot.y,
+        heading: r.episode.snapshot.heading,
+        trail: r.trail,
+      })),
+      crashMarkers: this.crashMarkers,
+      status: this.statusText(),
+      history: this.history,
+    });
+  }
+
+  /**
+   * True once every role has ended — vacuously true on a fresh load (no
+   * roles yet), which matters: the render loop treats `roundComplete()` as
+   * the signal to call `advance()`, so a fresh plate needs this to be true
+   * immediately to ever kick off its first round.
+   */
+  roundComplete(): boolean {
+    return this.roles.every((r) => r.outcome !== "running");
+  }
+
+  private statusText(): string {
+    const champion = this.roles.find((r) => r.role === "champion");
+    if (champion === undefined) return "—";
+    if (champion.episode.snapshot.laps >= 1) return "champion completed a lap";
+    if (champion.outcome === "crashed") return "champion crashed";
+    return "champion driving";
   }
 }
 
@@ -343,8 +589,6 @@ interface EnvironmentOption {
   build(stage: CanvasRenderingContext2D): Simulation;
 }
 
-const WEASEL_TARGET = "PROJECT DARWIN";
-
 const OPTIONS: readonly EnvironmentOption[] = [
   {
     numeral: "I",
@@ -355,18 +599,17 @@ const OPTIONS: readonly EnvironmentOption[] = [
       "Co-evolution: foxes evolve to catch, rabbits to escape. Fitness is relative and non-stationary — the CIAO plate (inset) reads a champion predator against every ancestral prey champion; a smooth gradient means real progress, banding means the race is only cycling.",
     build(stage) {
       const rng = new Rng(SEED);
-      const env = new PredatorPreyEnvironment(8, rng);
-      const populationSize = 40;
-      const driver = new CoevolutionDriver(
-        env.compete,
-        // rate ~0.45 keeps total mutation energy near the previously-tuned balance
-        // now that network magnitude scales with rate; a very gentle decay with a
-        // high floor keeps the arms race lively without over-cooling it.
-        { populationSize, eliteCount: 2, tournamentSize: 4, mutationRate: 0.45, mutationDecay: 0.999, minMutationRate: 0.12, opponentSampleSize: 4, hallOfFameSize: 5 },
-        rng,
-      );
+      const env = new PredatorPreyEnvironment(PREDATOR_PREY_PRESET.hiddenSize, rng);
+      const populationSize = PREDATOR_PREY_PRESET.populationSize;
+      const driver = new CoevolutionDriver(env.compete, PREDATOR_PREY_PRESET.coevolution, rng);
       const state: CoevolutionState = { predators: env.newPredators(populationSize), prey: env.newPrey(populationSize) };
-      return new CoevolutionSimulation(30, env, driver, state, new PredatorPreyView(stage, STAGE_WIDTH, STAGE_HEIGHT));
+      return new CoevolutionSimulation(
+        PREDATOR_PREY_PRESET.evolveInterval,
+        env,
+        driver,
+        state,
+        new PredatorPreyView(stage, STAGE_WIDTH, STAGE_HEIGHT),
+      );
     },
   },
   {
@@ -379,193 +622,81 @@ const OPTIONS: readonly EnvironmentOption[] = [
     build(stage) {
       const rng = new Rng(SEED);
       const env = new WeaselEnvironment(WEASEL_TARGET, rng);
-      const ga = new GenerationalGA({ populationSize: 300, eliteCount: 1, tournamentSize: 5, mutationRate: 0.05 }, rng);
+      const ga = new GenerationalGA(WEASEL_PRESET.ga, rng);
       const view = new WeaselView(stage, STAGE_WIDTH, STAGE_HEIGHT, WEASEL_TARGET);
-      return new GaSimulation(2, new Runner(env, ga, 300), view, "fitness", (best) => `${best.toFixed(0)} / ${env.maxFitness}`);
+      return new GaSimulation(
+        WEASEL_PRESET.evolveInterval,
+        new Runner(env, ga, WEASEL_PRESET.populationSize),
+        view,
+        "fitness",
+        (best) => `${best.toFixed(0)} / ${env.maxFitness}`,
+      );
     },
   },
   {
     numeral: "III",
-    label: "Landscape",
-    plateLabel: "Plate III — Landscape",
-    summary: "Vector genome on the Rastrigin surface",
-    footnote:
-      "The genome is the coordinate. Rastrigin's lattice of local optima is the real test of the search — escaping deception, not climbing an easy hill.",
-    build(stage) {
-      const rng = new Rng(SEED);
-      const env = new LandscapeEnvironment(2, rng);
-      // rate is now the mutation *radius* (× stdDev). Cool it from coarse (hop
-      // between Rastrigin optima) to fine (settle onto the origin). eliteCount
-      // raised to ~7% of the population: measured (see .docs/decisions.md) that
-      // with only 2 elites out of 300, blend crossover on this deceptive surface
-      // dilutes elite genes so thoroughly that population *average* fitness
-      // pins near-zero forever regardless of mutation tuning — raising the
-      // elite fraction is what actually lets the swarm visibly converge.
-      const ga = new GenerationalGA(
-        { populationSize: 300, eliteCount: 20, tournamentSize: 5, mutationRate: 1.0, mutationDecay: 0.985, minMutationRate: 0.02 },
-        rng,
-      );
-      const view = new LandscapeView(stage, STAGE_WIDTH, STAGE_HEIGHT);
-      return new GaSimulation(1, new Runner(env, ga, 300), view, "fitness", (best) => best.toFixed(3));
-    },
-  },
-  {
-    numeral: "IV",
     label: "TSP",
-    plateLabel: "Plate IV — Travelling Salesman",
+    plateLabel: "Plate III — Travelling Salesman",
     summary: "Permutation genome, order crossover",
     footnote:
       "A route must stay a valid permutation through every crossover — order crossover (OX) guarantees it. The same core that evolved a string now evolves a tour.",
     build(stage) {
       const rng = new Rng(SEED);
-      const env = new TspEnvironment(20, rng);
-      // Same elite-fraction fix as Landscape: the low-eliteCount plateau is a
-      // property of tournament+elitism breeding generally, not this genome's
-      // mutation specifically (order-crossover isn't touched — swap mutation
-      // semantics are unaffected by the annealing mechanism).
-      const ga = new GenerationalGA({ populationSize: 300, eliteCount: 20, tournamentSize: 5, mutationRate: 0.1 }, rng);
+      const env = new TspEnvironment(TSP_PRESET.nodeCount, rng);
+      const ga = new GenerationalGA(TSP_PRESET.ga, rng);
       const view = new TspView(stage, STAGE_WIDTH, STAGE_HEIGHT, env);
-      return new GaSimulation(1, new Runner(env, ga, 300), view, "route distance", (best) => (1 / best - 1).toFixed(3));
+      return new GaSimulation(
+        TSP_PRESET.evolveInterval,
+        new Runner(env, ga, TSP_PRESET.populationSize),
+        view,
+        "route distance",
+        (best) => (1 / best - 1).toFixed(3),
+      );
+    },
+  },
+  {
+    numeral: "IV",
+    label: "Track Runner",
+    plateLabel: "Plate IV — Track Runner",
+    summary: "Five rangefinders, a closed loop",
+    footnote:
+      "Progress-led shaping: checkpoints dominate raw distance so the car is driven to make real laps rather than idle or wall-hug — an episodic network, consulted every tick, steering by five rangefinders alone. Watches three cars from the current generation each drive one attempt to completion — the champion (moss), a middle-of-the-pack car (amber), and the current worst (rust) — so the whole population's spread is visible, not just one already-good lineage. Each crash stays marked on the track, fading over a few generations, and the \"vs. generation 1\" figure turns the improvement into a plain number.",
+    build(stage) {
+      const rng = new Rng(SEED);
+      const env = new TrackRunnerEnvironment(TRACKRUNNER_PRESET.hiddenSize, rng);
+      const ga = new GenerationalGA(TRACKRUNNER_PRESET.ga, rng);
+      const view = new TrackRunnerView(stage, STAGE_WIDTH, STAGE_HEIGHT, env);
+      return new TrackRunnerSimulation(new Runner(env, ga, TRACKRUNNER_PRESET.populationSize), env, view);
     },
   },
   {
     numeral: "V",
-    label: "Cart-pole",
-    plateLabel: "Plate V — Cart-pole",
-    summary: "Neural network, episodic control",
-    footnote:
-      "The first episodic environment: a network is consulted every tick and reward accumulates over an entire balancing act — frames upright, before the pole or the cart runs out of track.",
-    build(stage) {
-      const rng = new Rng(SEED);
-      const env = new CartPoleEnvironment(600, 6, 3, rng);
-      // eliteCount raised to ~8%: same elite-fraction fix as Landscape,
-      // measured to move population average from ~24 to ~144 frames (of 1800
-      // max) at generation 60 — the swarm now visibly improves, not just the
-      // single champion behind an unmoving average.
-      const ga = new GenerationalGA(
-        { populationSize: 150, eliteCount: 12, tournamentSize: 5, mutationRate: 0.5, mutationDecay: 0.99, minMutationRate: 0.03 },
-        rng,
-      );
-      const view = new CartPoleView(stage, STAGE_WIDTH, STAGE_HEIGHT, env);
-      return new GaSimulation(12, new Runner(env, ga, 150), view, "frames upright", (best) => `${best.toFixed(0)} / ${env.maxFitness}`);
-    },
-  },
-  {
-    numeral: "VI",
-    label: "Track Runner",
-    plateLabel: "Plate VI — Track Runner",
-    summary: "Five rangefinders, a closed loop",
-    footnote:
-      "Progress-led shaping: checkpoints dominate raw distance so the car is driven to make real laps rather than idle or wall-hug — the same episodic network as cart-pole, now steering by sensor alone.",
-    build(stage) {
-      const rng = new Rng(SEED);
-      const env = new TrackRunnerEnvironment(6, rng);
-      const ga = new GenerationalGA(
-        { populationSize: 150, eliteCount: 12, tournamentSize: 5, mutationRate: 0.5, mutationDecay: 0.99, minMutationRate: 0.03 },
-        rng,
-      );
-      const view = new TrackRunnerView(stage, STAGE_WIDTH, STAGE_HEIGHT, env);
-      // Approximate lap count from fitness: checkpoints dominate the score
-      // (distance contributes at most a few units), so floor(fitness /
-      // reward) / checkpoints-per-lap reads as "how many laps, roughly" —
-      // an honest, legible progress signal alongside the raw number.
-      const laps = (best: number): { label: string; value: string } => ({
-        label: "laps (approx.)",
-        value: (Math.floor(best / CHECKPOINT_REWARD) / CHECKPOINTS).toFixed(2),
-      });
-      return new GaSimulation(10, new Runner(env, ga, 150), view, "fitness", (best) => best.toFixed(2), (champion) => laps(champion.fitness));
-    },
-  },
-  {
-    numeral: "VII",
     label: "Maze",
-    plateLabel: "Plate VII — Maze",
-    summary: "One corridor, two selections",
+    plateLabel: "Plate V — Maze",
+    summary: "One corridor, one population learning it",
     footnote:
-      "The identical deceptive maze, run twice: Novelty Search (right) ignores the goal entirely and reaches it immediately by exploration alone; Objective fitness (left) is genuinely tempted by two near-goal dead ends and has to learn its way past them — watch its fitness climb from scratch over a handful of generations (Lehman & Stanley, 2011).",
-    build(stage) {
-      const rngA = new Rng(SEED);
-      const rngB = new Rng(SEED);
-      const objEnv = new MazeEnvironment(6, rngA);
-      const novEnv = new MazeEnvironment(6, rngB);
-      // Objective side cools toward refinement and uses the same raised elite
-      // fraction as the other GA environments; the novelty side deliberately
-      // keeps eliteCount low and mutation constant, since its archive already
-      // preserves diversity and exploration is the whole point.
-      const objConfig = { populationSize: 150, eliteCount: 12, tournamentSize: 5, mutationRate: 0.5, mutationDecay: 0.99, minMutationRate: 0.05 };
-      const ga = new GenerationalGA(objConfig, rngA);
-      const novelty = new NoveltySearch(
-        { populationSize: 150, eliteCount: 2, tournamentSize: 5, mutationRate: 0.4, neighbours: 8, archiveThreshold: 0.03, archiveLimit: 400 },
-        rngB,
-      );
-      const view = new MazeDuoView(stage, STAGE_WIDTH, STAGE_HEIGHT, objEnv);
-      return new MazeSimulation(10, objEnv, novEnv, new Runner(objEnv, ga, 150), novelty, novEnv.newPopulation(150), view);
-    },
-  },
-  {
-    numeral: "VIII",
-    label: "Gait",
-    plateLabel: "Plate VIII — Gait",
-    summary: "No objective — an illuminated archive",
-    footnote:
-      "MAP-Elites keeps only the fittest hopper found at each (stride length, duty factor) cell, building a gallery of viable gaits — a fast bounder, a shuffling crawler — rather than converging on one champion (Mouret & Clune, 2015).",
+      "A deceptive maze: partway along the true path, a fork looks like it's getting closer to the goal but is actually a dead end. Watches three agents from the current generation each run the maze once — the champion (moss), a middle-of-the-pack agent (amber), and the current worst (rust) — so the whole population's spread is visible, not just one already-good lineage. Each crash stays marked in the maze, fading over a few generations, and the \"vs. generation 1\" figure turns the improvement into a plain number. `NoveltySearch` — a second selection pressure that ignores the goal entirely and still solves this maze — also runs on the identical environment (`npm run experiment -- --study maze-deception`) but is not part of the on-screen demo.",
     build(stage) {
       const rng = new Rng(SEED);
-      const env = new GaitEnvironment(6, rng);
-      const bins = 20;
-      const elites = new MapElites(
-        {
-          dimensions: [
-            { min: GaitEnvironment.BEHAVIOUR_BOUNDS.strideLength.min, max: GaitEnvironment.BEHAVIOUR_BOUNDS.strideLength.max, bins },
-            { min: GaitEnvironment.BEHAVIOUR_BOUNDS.dutyFactor.min, max: GaitEnvironment.BEHAVIOUR_BOUNDS.dutyFactor.max, bins },
-          ],
-          initialPopulation: 200,
-          batchSize: 40,
-          // Raised to keep archive coverage now that network magnitude scales
-          // with rate; MAP-Elites wants a constant, exploratory temperature.
-          mutationRate: 0.5,
-        },
-        rng,
-      );
-      const view = new GaitArchiveView(stage, STAGE_WIDTH, STAGE_HEIGHT, bins);
-      return new MapElitesSimulation(3, elites, env, view, bins);
-    },
-  },
-  {
-    numeral: "IX",
-    label: "XOR",
-    plateLabel: "Plate IX — XOR",
-    summary: "String genome's neighbor, minus the network",
-    footnote:
-      "The smallest honest test of the hidden layer: fitness is 4 minus squared error across all four non-linearly-separable cases — the sanity check underneath every network environment on this bench.",
-    build(stage) {
-      const rng = new Rng(SEED);
-      const env = new XorEnvironment(4, rng);
-      const ga = new GenerationalGA(
-        { populationSize: 100, eliteCount: 8, tournamentSize: 5, mutationRate: 0.4, mutationDecay: 0.98, minMutationRate: 0.05 },
-        rng,
-      );
-      const view = new XorView(stage, STAGE_WIDTH, STAGE_HEIGHT);
-      // The raw fitness metric asymptotes (sigmoid never outputs exactly 0/1),
-      // so a genuinely correct network can still read "3.8 / 4" and look
-      // unfinished. "cases solved" is the honest signal: it flips to 4/4 the
-      // instant every case lands on the correct side of the 0.5 threshold.
-      const casesSolved = (champion: Genome): { label: string; value: string } => {
-        const net = champion as Network;
-        let solved = 0;
-        for (const { input, target } of XOR_CASES) {
-          const output = net.feedForward(input)[0] as number;
-          if ((output >= 0.5 ? 1 : 0) === target) solved++;
-        }
-        return { label: "cases solved", value: `${solved} / 4` };
-      };
-      return new GaSimulation(2, new Runner(env, ga, 100), view, "fitness", (best) => `${best.toFixed(3)} / 4`, casesSolved);
+      const env = new MazeEnvironment(MAZE_PRESET.hiddenSize, rng);
+      const ga = new GenerationalGA(MAZE_PRESET.ga, rng);
+      const view = new MazeView(stage, STAGE_WIDTH, STAGE_HEIGHT, env);
+      return new MazeSimulation(env, new Runner(env, ga, MAZE_PRESET.populationSize), view);
     },
   },
 ];
 
 /** The environment shown on load — the arms race is the project's landing view (PRD §10, §14). */
 const DEFAULT_INDEX = 0;
+
+/**
+ * The fixed half of the info card (`#infoBtn`) — same on every plate. The
+ * other half is each plate's own `footnote`, already written as a "how to
+ * read this" explanation; reusing it here avoids maintaining the same
+ * per-plate content in two places that could quietly drift apart.
+ */
+const NEUROEVOLUTION_PRIMER =
+  "Project Darwin evolves solutions instead of programming them. Every candidate answer here — a genome — starts as random noise: a string of letters, a list of numbers, an ordering of cities, or the weights inside a small neural network. A population of hundreds of these genomes is scored by a fitness function specific to whatever's being solved (how far did the car get before crashing? how close to the goal?). The fittest genomes are the most likely to breed: two parents' genomes get mixed together (crossover), small random changes get introduced (mutation), and the result becomes the next generation. Repeat that cycle — score, select, breed — enough times, and the population's solutions measurably improve, with no hand-written rules about the task itself. That loop is the entire engine, and the code that runs it is identical no matter which plate below you're watching. Only the genome type and the fitness function change per environment; the evolutionary logic never does. That's what \"representation-blind\" means, and it's the thesis this whole project sets out to prove.";
 
 function main(): void {
   const app = document.querySelector<HTMLDivElement>("#app");
@@ -576,10 +707,36 @@ function main(): void {
       <div class="page">
         <div class="header-row">
           <div>
-            <div class="lab title">Project Darwin</div>
+            <div class="lab title">
+              Project Darwin
+              <button class="info-btn" id="infoBtn" type="button" aria-label="About this demo">i</button>
+            </div>
             <div class="lab subtitle">A Representation-Blind Evolutionary Engine</div>
           </div>
           <div class="tabs" id="tabs"></div>
+        </div>
+        <div class="controls-row" id="controls">
+          <div class="control-group">
+            <label class="lab control-label" for="seedInput">seed</label>
+            <input class="control-input" id="seedInput" type="number" value="${DEFAULT_SEED}" step="1" />
+            <button class="control-btn" id="seedApplyBtn" type="button">apply</button>
+          </div>
+          <div class="control-group">
+            <button class="control-btn" id="pauseBtn" type="button">pause</button>
+            <button class="control-btn" id="stepBtn" type="button" disabled>step</button>
+            <button class="control-btn" id="resetBtn" type="button">reset</button>
+          </div>
+          <div class="control-group">
+            <label class="lab control-label" for="speedSelect">speed</label>
+            <select class="control-input" id="speedSelect">
+              <option value="0.25">0.25×</option>
+              <option value="0.5">0.5×</option>
+              <option value="1" selected>1×</option>
+              <option value="2">2×</option>
+              <option value="4">4×</option>
+              <option value="8">8×</option>
+            </select>
+          </div>
         </div>
         <div class="plate-frame">
           <div class="plate">
@@ -594,6 +751,16 @@ function main(): void {
         <p class="footnote" id="footnote"></p>
       </div>
     </div>
+    <div class="info-overlay" id="infoOverlay" hidden>
+      <div class="info-card" role="dialog" aria-modal="true" aria-labelledby="infoPrimerTitle">
+        <button class="info-close" id="infoCloseBtn" type="button" aria-label="Close">×</button>
+        <h2 id="infoPrimerTitle">What is a neuroevolution engine?</h2>
+        <p>${NEUROEVOLUTION_PRIMER}</p>
+        <hr class="info-divider" />
+        <h2 id="infoPlateTitle"></h2>
+        <p id="infoPlateBody"></p>
+      </div>
+    </div>
   `;
 
   const scaleRoot = must<HTMLDivElement>(app, "#scaleRoot");
@@ -603,11 +770,28 @@ function main(): void {
   const plateSummary = must<HTMLDivElement>(app, "#plateSummary");
   const readoutEl = must<HTMLDivElement>(app, "#readout");
   const footnote = must<HTMLParagraphElement>(app, "#footnote");
+  const seedInput = must<HTMLInputElement>(app, "#seedInput");
+  const seedApplyBtn = must<HTMLButtonElement>(app, "#seedApplyBtn");
+  const pauseBtn = must<HTMLButtonElement>(app, "#pauseBtn");
+  const stepBtn = must<HTMLButtonElement>(app, "#stepBtn");
+  const resetBtn = must<HTMLButtonElement>(app, "#resetBtn");
+  const speedSelect = must<HTMLSelectElement>(app, "#speedSelect");
+  const infoBtn = must<HTMLButtonElement>(app, "#infoBtn");
+  const infoOverlay = must<HTMLDivElement>(app, "#infoOverlay");
+  const infoCloseBtn = must<HTMLButtonElement>(app, "#infoCloseBtn");
+  const infoPlateTitle = must<HTMLHeadingElement>(app, "#infoPlateTitle");
+  const infoPlateBody = must<HTMLParagraphElement>(app, "#infoPlateBody");
   const stage = context2d(stageCanvas);
 
   let activeIndex = DEFAULT_INDEX;
   let active: Simulation;
   let frame = 0;
+  let paused = false;
+  let speedMultiplier = 1;
+  /** Fractional sim-ticks-per-frame accumulator for round-paced plates, so 0.25×–8× all work through one path without an integer-only frame-skip scheme. */
+  let tickBudget = 0;
+  /** Rendered frames remaining to hold a just-completed round's final state (see {@link ROUND_HOLD_FRAMES}). */
+  let holdFrames = 0;
 
   const renderTabs = (): void => {
     tabs.innerHTML = "";
@@ -624,11 +808,17 @@ function main(): void {
   const renderReadout = (): void => {
     const { generation, metricLabel, metricValue, secondary, tertiary } = active.readout;
     const line = (label: string, value: string): string => `<div style="margin-top:4px;">${label} ${value}</div>`;
+    // `tertiary` is reserved for the plate's single most important extra
+    // stat (predator–prey's dominance fraction, Track Runner/Maze's "vs.
+    // generation 1" multiplier) — rendered bold and moss-coloured so it
+    // reads as a headline result, not another line of plain metadata.
+    const highlightLine = (label: string, value: string): string =>
+      `<div class="readout-highlight" style="margin-top:6px;">${value} <span style="font-weight:400;font-size:11px;color:rgba(28,27,23,0.6);">${label}</span></div>`;
     readoutEl.innerHTML =
       `<div>generation ${generation}</div>` +
       line(metricLabel, metricValue) +
       (secondary !== undefined ? line(secondary.label, secondary.value) : "") +
-      (tertiary !== undefined ? line(tertiary.label, tertiary.value) : "");
+      (tertiary !== undefined ? highlightLine(tertiary.label, tertiary.value) : "");
   };
 
   const load = (index: number): void => {
@@ -637,14 +827,101 @@ function main(): void {
     if (option === undefined) throw new Error(`unknown environment index ${index}`);
     active = option.build(stage);
     frame = 0;
+    tickBudget = 0;
+    holdFrames = 0;
     stage.fillStyle = CREAM;
     stage.fillRect(0, 0, STAGE_WIDTH, STAGE_HEIGHT);
     plateLabel.textContent = option.plateLabel;
     plateSummary.textContent = option.summary;
     footnote.textContent = option.footnote;
+    infoPlateTitle.textContent = option.plateLabel;
+    infoPlateBody.textContent = option.footnote;
     renderTabs();
     renderReadout();
+    // Draw one frame immediately regardless of `paused` — otherwise a fresh
+    // load (from a re-seed or reset) while paused would leave the canvas
+    // showing only the cleared background until the next step or unpause.
+    active.draw();
   };
+
+  const renderPauseState = (): void => {
+    pauseBtn.textContent = paused ? "play" : "pause";
+    pauseBtn.classList.toggle("control-btn-active", paused);
+    stepBtn.disabled = !paused;
+  };
+
+  const applySeed = (): void => {
+    const parsed = Number(seedInput.value);
+    if (!Number.isFinite(parsed)) {
+      seedInput.value = String(SEED); // reject and restore rather than silently reseed with NaN/garbage
+      return;
+    }
+    SEED = Math.trunc(parsed);
+    load(activeIndex);
+  };
+
+  seedApplyBtn.addEventListener("click", applySeed);
+  seedInput.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") applySeed();
+  });
+
+  pauseBtn.addEventListener("click", () => {
+    paused = !paused;
+    renderPauseState();
+  });
+
+  stepBtn.addEventListener("click", () => {
+    if (!paused) return;
+    if (active.pacing.kind === "round") {
+      // "Step" means one generation for every plate, not one tick — for a
+      // round-paced plate that means: evolve/spawn a round if the previous
+      // one already finished (or none has run yet — a fresh load's cohort is
+      // empty, so `roundComplete()` is vacuously true), then run that round
+      // to completion (bounded: every round-paced plate guarantees
+      // `roundComplete()` eventually turns true, either every cohort member
+      // ending or its own tick cap). Evolving *before* ticking, not after, is
+      // what leaves the just-run round's actual finish — crash positions,
+      // the outcome tally — on screen for this click, instead of already
+      // being replaced by the next round's untouched starting state.
+      if (active.roundComplete?.() === true) active.advance();
+      while (active.roundComplete?.() !== true) active.tick();
+      tickBudget = 0;
+      holdFrames = 0;
+    } else {
+      active.advance();
+    }
+    active.draw();
+    renderReadout();
+  });
+
+  resetBtn.addEventListener("click", () => load(activeIndex));
+
+  const openInfo = (): void => {
+    infoOverlay.hidden = false;
+  };
+  const closeInfo = (): void => {
+    infoOverlay.hidden = true;
+  };
+  infoBtn.addEventListener("click", openInfo);
+  infoCloseBtn.addEventListener("click", closeInfo);
+  // Backdrop click closes; a click on the card itself must not bubble here
+  // (the card sits inside the overlay, and a plain listener on the overlay
+  // would otherwise close it the instant anyone clicks the text inside).
+  infoOverlay.addEventListener("click", (event) => {
+    if (event.target === infoOverlay) closeInfo();
+  });
+  window.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && !infoOverlay.hidden) closeInfo();
+  });
+
+  speedSelect.addEventListener("change", () => {
+    const parsed = Number(speedSelect.value);
+    speedMultiplier = Number.isFinite(parsed) && parsed > 0 ? parsed : 1;
+    frame = 0; // avoid a stale modulo phase producing an odd double-advance right after a speed change
+    tickBudget = 0; // avoid a stale fractional accumulator carrying over at the new speed
+  });
+
+  renderPauseState();
 
   load(DEFAULT_INDEX);
 
@@ -652,12 +929,58 @@ function main(): void {
   window.addEventListener("resize", () => fitToViewport(scaleRoot));
 
   const loop = (): void => {
-    frame++;
-    if (frame % active.evolveInterval === 0) {
-      active.advance();
-      renderReadout();
+    if (!paused) {
+      if (holdFrames > 0) {
+        // Freeze on a just-completed round's final state — see ROUND_HOLD_FRAMES.
+        holdFrames--;
+      } else if (active.pacing.kind === "round") {
+        // A completed round is only evolved away right here, at the top of
+        // the frame ticking resumes for it — never the instant it finishes.
+        // (`roundComplete()` is also vacuously true on a fresh load's empty
+        // cohort, so this doubles as the kickoff for the very first round.)
+        // Evolving eagerly, the moment `roundComplete()` first turns true,
+        // would replace the finished cohort with a freshly spawned one
+        // *before* `holdFrames` ever gets to hold on it — so every hold, and
+        // every one of that round's own final numbers (crash positions, the
+        // outcome tally), would be the *next* round's untouched start state,
+        // never the one that just actually ran.
+        if (active.roundComplete?.() === true) active.advance();
+
+        // `speedMultiplier` scales simulation ticks per rendered frame — at
+        // 0.25× a 500-tick round takes ~33s (deliberately slow enough to
+        // study); at 8× it runs in a couple of seconds. The fractional
+        // accumulator means every speed, including <1×, works through the
+        // same path rather than a separate integer frame-skip scheme.
+        tickBudget += speedMultiplier;
+        while (tickBudget >= 1) {
+          tickBudget -= 1;
+          active.tick();
+          if (active.roundComplete?.() === true) {
+            holdFrames = ROUND_HOLD_FRAMES;
+            tickBudget = 0;
+            break;
+          }
+        }
+        // Round-paced plates update `readout` on every tick (e.g. Track
+        // Runner's "completed a lap" counter climbing mid-round, not just at
+        // round end) — refresh the DOM every frame so that's actually visible,
+        // not just on the generation boundary.
+        renderReadout();
+      } else {
+        frame++;
+        // `speedMultiplier` scales how often a generation evolves relative to
+        // each plate's own tuned `evolveInterval` — shrinking the effective
+        // interval speeds evolution up, growing it slows evolution down,
+        // without any plate needing to know a speed control exists.
+        const effectiveInterval = Math.max(1, Math.round(active.pacing.evolveInterval / speedMultiplier));
+        if (frame % effectiveInterval === 0) {
+          active.advance();
+          renderReadout();
+        }
+        active.tick();
+      }
+      active.draw();
     }
-    active.frame();
     requestAnimationFrame(loop);
   };
   requestAnimationFrame(loop);
