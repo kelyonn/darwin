@@ -55,6 +55,12 @@ describe("TrackRunnerEnvironment", () => {
     expect(steps).toBeGreaterThan(0);
   });
 
+  // 60 generations at population 150 is genuinely ~19–20s of synchronous
+  // work (measured) — comfortably past vitest's 5000ms default. Under
+  // vitest 1 this happened to pass anyway (a synchronous block can't be
+  // pre-empted by a setTimeout-based timeout mid-flight); vitest 4 enforces
+  // it correctly, surfacing a real, pre-existing test-suite gap rather than
+  // a new one. Timeout sized with a comfortable margin above measured cost.
   it("does not reward hugging either wall over a genuine centred lap (regression)", () => {
     // A raw, unweighted angle-tracking checkpoint formula lets a genome earn
     // fitness by circling the smallest (or, if weighted the naive way, the
@@ -94,5 +100,5 @@ describe("TrackRunnerEnvironment", () => {
     expect(avgRadius).toBeGreaterThan(innerRadius + wallMargin);
     expect(avgRadius).toBeLessThan(outerRadius - wallMargin);
     expect(Math.abs(avgRadius - midRadius)).toBeLessThan((outerRadius - innerRadius) / 2);
-  });
+  }, 30000);
 });

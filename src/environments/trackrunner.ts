@@ -15,7 +15,8 @@ const SENSOR_STEP = 0.006;
 /** Per-tick travel at full throttle, and maximum heading change per tick. */
 const MAX_SPEED = 0.01;
 const MAX_TURN = 0.18;
-const EPISODE_STEPS = 500;
+/** The budget `evaluate` scores an episode against — exported so the render layer's live-replay cap can match it exactly rather than duplicating the number (see `createEpisode`'s doc). */
+export const EPISODE_STEPS = 500;
 /** Ring divided into this many checkpoints; each is worth `CHECKPOINT_REWARD`. */
 export const CHECKPOINTS = 16;
 export const CHECKPOINT_REWARD = 5;
@@ -44,6 +45,14 @@ export interface CarSnapshot {
   readonly y: number;
   readonly heading: number;
   readonly sensors: readonly number[];
+  /**
+   * Laps completed so far, as a continuous value (not floored) — the same
+   * radius-weighted angle `fitnessOf`'s `checkpoints` term scores, expressed
+   * as full turns (`weightedAngle / 2π`) instead of discrete checkpoint
+   * sectors, so the display and the score agree by construction rather than
+   * by a re-derived approximation.
+   */
+  readonly laps: number;
 }
 
 /** An episode advanced one tick at a time, for live animation. */
@@ -105,7 +114,16 @@ export class TrackRunnerEnvironment implements Environment {
     return fitnessOf(state);
   }
 
-  /** Creates an episode a renderer advances one tick per frame. */
+  /**
+   * Creates an episode a renderer advances one tick per frame. Ends on wall
+   * contact; otherwise runs indefinitely (unlike `evaluate`, which stops at
+   * `EPISODE_STEPS`) — deliberately, so a caller that wants more runway than
+   * the scoring budget (a test checking whether a policy would *eventually*
+   * survive longer, say) can just keep calling `step`. Callers that want a
+   * live replay bounded to what was actually scored — the render layer, so a
+   * flawless champion doesn't lock the view on itself forever — enforce that
+   * cap themselves (see `TrackRunnerView` in `render/views.ts`).
+   */
   createEpisode(network: Network): LiveTrackEpisode {
     const state = startingCar();
     let alive = true;
@@ -122,6 +140,9 @@ export class TrackRunnerEnvironment implements Environment {
         },
         get sensors() {
           return senseWalls(state);
+        },
+        get laps() {
+          return Math.abs(state.weightedAngle) / (2 * Math.PI);
         },
       },
       step: (): boolean => {
