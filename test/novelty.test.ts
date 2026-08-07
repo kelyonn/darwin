@@ -42,6 +42,32 @@ describe("NoveltySearch", () => {
     expect(outlier.fitness).toBeGreaterThan(clustered.fitness);
   });
 
+  it("correctly counts a genuine zero-distance neighbour when two genomes share identical behaviour", () => {
+    // Self-exclusion is by index, not by inferring "the first zero distance
+    // is self" — that assumption would still happen to give the right mean
+    // here (removing any one occurrence of the minimum value from a sorted
+    // array is order-independent), but excluding by index is the version a
+    // reader doesn't have to re-derive that argument to trust.
+    const rng = new Rng(3);
+    const novelty = new NoveltySearch(
+      { populationSize: 4, eliteCount: 1, tournamentSize: 2, mutationRate: 0.1, neighbours: 1, archiveThreshold: 999, archiveLimit: 10 },
+      rng,
+    );
+    // Two genomes share the identical behaviour [0, 0]; two others are each
+    // 1 unit away in a different direction.
+    const population = [
+      withBehaviour(rng, [0, 0]),
+      withBehaviour(rng, [0, 0]), // identical to the first
+      withBehaviour(rng, [1, 0]),
+      withBehaviour(rng, [0, 1]),
+    ];
+    novelty.step(population, () => 0);
+    // With k=1, each of the identical pair's single nearest *other*
+    // neighbour is the other one, at distance 0.
+    expect((population[0] as Network).fitness).toBe(0);
+    expect((population[1] as Network).fitness).toBe(0);
+  });
+
   it("throws if the environment never sets a behaviour descriptor", () => {
     const rng = new Rng(1);
     const novelty = new NoveltySearch(
