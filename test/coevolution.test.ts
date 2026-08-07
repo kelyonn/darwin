@@ -9,6 +9,7 @@ import {
 } from "../src/search/coevolution.js";
 import { PredatorPreyEnvironment } from "../src/environments/predatorPrey.js";
 import { Network } from "../src/core/network.js";
+import type { Genome } from "../src/core/genome.js";
 
 const config: CoevolutionConfig = {
   populationSize: 12,
@@ -50,6 +51,32 @@ describe("dominanceCount", () => {
     expect(counts).toEqual([1, 1, 2]);
     for (let i = 1; i < counts.length; i++) {
       expect(counts[i] as number).toBeGreaterThanOrEqual(counts[i - 1] as number);
+    }
+  });
+
+  it("the raw count can rise while the fraction falls — the defect §1.2/ADR-012 fixed in main.ts's readout", () => {
+    // A synthetic lineage that is, by the fraction of ancestors beaten,
+    // *declining*: it beats a shrinking share of a growing ancestor archive
+    // each generation. The raw count nonetheless keeps climbing purely
+    // because the archive keeps growing — exactly the failure mode measured
+    // on the live demo before the fix (`.docs/known-issues.md`,
+    // `--study coevolution-progress`). This is why `main.ts`'s dominance
+    // readout must lead with the fraction, not the count.
+    const rowFor = (archiveSize: number, beaten: number): number[] =>
+      Array.from({ length: archiveSize }, (_, i) => (i < beaten ? 0.9 : 0.1));
+
+    const generations = [rowFor(2, 2), rowFor(4, 2), rowFor(8, 3), rowFor(16, 3), rowFor(32, 4)];
+    const counts = generations.map(dominanceCount);
+    const fractions = generations.map((row) => dominanceCount(row) / row.length);
+
+    expect(counts).toEqual([2, 2, 3, 3, 4]);
+    for (let i = 1; i < counts.length; i++) {
+      expect(counts[i] as number).toBeGreaterThanOrEqual(counts[i - 1] as number);
+    }
+
+    expect(fractions[fractions.length - 1] as number).toBeLessThan(fractions[0] as number);
+    for (let i = 1; i < fractions.length; i++) {
+      expect(fractions[i] as number).toBeLessThanOrEqual(fractions[i - 1] as number);
     }
   });
 });
@@ -180,5 +207,65 @@ describe("PredatorPreyEnvironment", () => {
     );
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     expect(() => env.compete({} as any, network)).toThrow(TypeError);
+  });
+
+  it("a champion's performance does not collapse against a held-out starting geometry (ADR-012 regression)", () => {
+    // Before ADR-012, every contest ran from one fixed geometry (both agents
+    // on the x-axis, headings 0). A predator could learn an open-loop
+    // trajectory valid only for that one start, and nothing would catch it.
+    // This trains a champion under one environment's own trial conditions,
+    // then re-scores it against a *different* environment instance — a
+    // different seed, so entirely different starting positions/headings —
+    // and asserts the score stays close, not collapsed.
+    const trainConfig: CoevolutionConfig = {
+      populationSize: 16,
+      eliteCount: 2,
+      tournamentSize: 3,
+      mutationRate: 0.4,
+      opponentSampleSize: 4,
+      hallOfFameSize: 3,
+    };
+
+    function fittestNetwork(population: readonly Genome[]): Network {
+      let best = population[0];
+      if (best === undefined) throw new Error("empty population");
+      for (const genome of population) if (genome.fitness > best.fitness) best = genome;
+      return best as Network;
+    }
+
+    for (const [trainSeed, heldOutSeed] of [
+      [1, 2],
+      [7, 77],
+    ] as const) {
+      const trainRng = new Rng(trainSeed);
+      const trainEnv = new PredatorPreyEnvironment(6, trainRng);
+      const driver = new CoevolutionDriver(trainEnv.compete, trainConfig, trainRng);
+      let state: CoevolutionState = {
+        predators: trainEnv.newPredators(trainConfig.populationSize),
+        prey: trainEnv.newPrey(trainConfig.populationSize),
+      };
+      for (let generation = 0; generation < 20; generation++) {
+        state = driver.step(state).next;
+      }
+      const champion = fittestNetwork(state.predators);
+
+      const heldOutEnv = new PredatorPreyEnvironment(6, new Rng(heldOutSeed));
+      const testPrey = heldOutEnv.newPrey(15) as Network[];
+
+      let homeScore = 0;
+      let heldOutScore = 0;
+      for (const prey of testPrey) {
+        homeScore += trainEnv.compete(champion, prey).predatorScore;
+        heldOutScore += heldOutEnv.compete(champion, prey).predatorScore;
+      }
+      homeScore /= testPrey.length;
+      heldOutScore /= testPrey.length;
+
+      // Measured baseline (three independent seed pairs, larger population):
+      // held-out/home ratio was 0.98–1.01. This asserts a generous floor well
+      // below that, so the test catches a real collapse without being flaky.
+      expect(heldOutScore).toBeGreaterThan(homeScore * 0.7);
+      expect(heldOutScore).toBeGreaterThan(0.5);
+    }
   });
 });

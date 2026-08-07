@@ -75,11 +75,19 @@ const DOMINANCE_THRESHOLD = 0.5;
  * Dominance count (a dominance-tournament progress proxy; Stanley;
  * RESEARCH.md §4.5): how many ancestral opponents the current champion beats,
  * read straight from its CIAO row (the champion predator's payoff against every
- * past prey champion). Because coevolutionary fitness is *relative* and cannot
- * be compared across generations, a rising dominance count is one of the few
- * honest absolute signals that the predator lineage is genuinely improving
- * rather than merely cycling — though it is a monotone-ish proxy, not a
- * guarantee.
+ * past prey champion).
+ *
+ * **This raw count is not, by itself, an honest progress signal.** It rises
+ * mechanically as the archive it's measured against grows each generation,
+ * regardless of whether the champion is actually improving — measured
+ * (ADR-012, `--study coevolution-progress`): on one seed the count climbed
+ * from 19 to 67 across 200 generations while the *fraction* of ancestors
+ * beaten (`dominanceCount(row) / row.length`) fell from 76% to 34% over the
+ * same run, i.e. the raw count rose under what was, by the fraction, a
+ * declining lineage. Callers wanting a progress signal should divide by
+ * `ciaoRow.length` and watch the fraction, which can actually fall and so can
+ * actually report cycling rather than only ever climbing (see
+ * `CoevolutionSimulation.advance` in `main.ts`, and `.docs/known-issues.md`).
  *
  * @param ciaoRow The current champion's score against each ancestral opponent.
  */

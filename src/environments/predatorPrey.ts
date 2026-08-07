@@ -19,14 +19,38 @@ const PREDATOR_MAX_TURN = 0.3;
 const PREY_MAX_TURN = 0.4;
 /** Contact distance at which the predator captures the prey. */
 const CAPTURE_RADIUS = 0.04;
-/** Contest length in ticks. */
+/** Contest length in ticks, per trial. */
 const EPISODE_STEPS = 200;
+/**
+ * Number of starting configurations averaged per contest (ADR-012). A single
+ * fixed start (both agents on the x-axis, both heading 0 — i.e. the prey
+ * starting turned directly *away* from the predator) let controllers learn an
+ * open-loop trajectory valid only for that one geometry; nothing could tell
+ * whether they had. Every contest now runs all `TRIALS` conditions and
+ * averages the payoff, so `compete` stays deterministic (fixed conditions,
+ * fixed order) while no longer testing exactly one geometry.
+ */
+const TRIALS = 3;
+/**
+ * Half the separation between predator and prey at the start of a trial — kept
+ * identical across all `TRIALS` conditions (only the bearing between them and
+ * both headings vary) so trial difficulty doesn't swing with distance, per the
+ * remediation plan's guidance. Matches the original fixed start's separation
+ * of `2 × CONTEST_RADIUS = 0.5`.
+ */
+const CONTEST_RADIUS = 0.25;
 
 /** Mutable state of one agent during a contest. */
 interface Agent {
   x: number;
   y: number;
   heading: number;
+}
+
+/** One trial's starting configuration for both agents. */
+interface ContestStart {
+  readonly predator: Readonly<Agent>;
+  readonly prey: Readonly<Agent>;
 }
 
 /** Read-only view of an agent for rendering. */
@@ -62,11 +86,15 @@ export interface LivePredatorPreyEpisode {
  * environment assigns meaning by wiring one net to the predator body and one to
  * the prey body and by scoring capture versus escape.
  *
- * A contest is deterministic: fixed starting positions shared by every pairing,
- * so outcomes reflect controller skill and a seeded run reproduces exactly.
+ * A contest is deterministic: `TRIALS` starting configurations are drawn once
+ * at construction (ADR-012) and shared by every pairing this instance ever
+ * runs, so outcomes reflect controller skill generalising across varied starts
+ * — not a single memorised geometry — and a seeded run still reproduces
+ * exactly.
  */
 export class PredatorPreyEnvironment {
   private readonly networkConfig: NetworkConfig;
+  private readonly starts: readonly ContestStart[];
 
   constructor(hiddenSize: number, private readonly rng: Rng) {
     if (hiddenSize <= 0) {
@@ -78,6 +106,7 @@ export class PredatorPreyEnvironment {
       mutationStdDev: 0.3,
       outputActivation: "tanh",
     };
+    this.starts = Array.from({ length: TRIALS }, () => randomStart(rng));
   }
 
   /** Creates a fresh predator population. */
@@ -91,23 +120,27 @@ export class PredatorPreyEnvironment {
   }
 
   /**
-   * Runs one contest and returns the graded outcome. Bound as the `compete`
-   * callback for {@link CoevolutionDriver}.
+   * Runs a contest across every trial starting configuration and returns the
+   * averaged, graded outcome. Bound as the `compete` callback for
+   * {@link CoevolutionDriver}.
    */
   compete = (predator: Genome, prey: Genome): CompetitionOutcome => {
     if (!(predator instanceof Network) || !(prey instanceof Network)) {
       throw new TypeError("PredatorPreyEnvironment can only pit a Network against a Network");
     }
-    return simulate(predator, prey);
+    return simulate(predator, prey, this.starts);
   };
 
   /**
    * Creates a contest a renderer advances one tick per frame, so a champion
-   * pairing can be animated live. The physics matches {@link compete}.
+   * pairing can be animated live. Uses one of the `TRIALS` conditions
+   * `compete` itself averages over (trial 0 by default); the physics of that
+   * single trial matches {@link compete} exactly.
    */
-  createEpisode(predator: Network, prey: Network): LivePredatorPreyEpisode {
-    const predatorAgent = startingPredator();
-    const preyAgent = startingPrey();
+  createEpisode(predator: Network, prey: Network, trial = 0): LivePredatorPreyEpisode {
+    const start = this.starts[trial % this.starts.length] as ContestStart;
+    const predatorAgent: Agent = { ...start.predator };
+    const preyAgent: Agent = { ...start.prey };
     let captured = false;
     return {
       snapshot: {
@@ -130,10 +163,10 @@ export class PredatorPreyEnvironment {
   }
 }
 
-/** Runs a full contest and grades it. */
-function simulate(predator: Network, prey: Network): CompetitionOutcome {
-  const predatorAgent = startingPredator();
-  const preyAgent = startingPrey();
+/** Runs a single trial from `start` and grades it. */
+function simulateTrial(predator: Network, prey: Network, start: ContestStart): CompetitionOutcome {
+  const predatorAgent: Agent = { ...start.predator };
+  const preyAgent: Agent = { ...start.prey };
   let closest = distance(predatorAgent, preyAgent);
 
   for (let step = 0; step < EPISODE_STEPS; step++) {
@@ -151,6 +184,21 @@ function simulate(predator: Network, prey: Network): CompetitionOutcome {
   // No capture: partial credit for how close the predator got, always below 0.5.
   const predatorScore = 0.5 * (1 - Math.min(closest / ARENA_DIAGONAL, 1));
   return { captured: false, predatorScore, preyScore: 1 - predatorScore };
+}
+
+/**
+ * Runs every trial in `starts` and averages the graded predator payoff
+ * (ADR-012). `captured`/`preyScore` are derived from that average, which keeps
+ * the documented invariant on {@link CompetitionOutcome} — `predatorScore`
+ * strictly above 0.5 iff `captured` — true by construction, not by convention.
+ */
+function simulate(predator: Network, prey: Network, starts: readonly ContestStart[]): CompetitionOutcome {
+  let predatorScoreSum = 0;
+  for (const start of starts) {
+    predatorScoreSum += simulateTrial(predator, prey, start).predatorScore;
+  }
+  const predatorScore = predatorScoreSum / starts.length;
+  return { captured: predatorScore > 0.5, predatorScore, preyScore: 1 - predatorScore };
 }
 
 /**
@@ -178,12 +226,21 @@ function observe(self: Agent, opponent: Agent): readonly number[] {
   return [Math.min(separation / ARENA_DIAGONAL, 1), Math.sin(bearing), Math.cos(bearing)];
 }
 
-function startingPredator(): Agent {
-  return { x: 0.25 * ARENA_SIZE, y: 0.5 * ARENA_SIZE, heading: 0 };
-}
-
-function startingPrey(): Agent {
-  return { x: 0.75 * ARENA_SIZE, y: 0.5 * ARENA_SIZE, heading: 0 };
+/**
+ * Draws one trial's starting configuration: predator and prey placed
+ * `2 × CONTEST_RADIUS` apart at a random bearing around the arena centre, each
+ * with an independently random heading (so neither agent starts assuming a
+ * fixed geometry, unlike the single hand-picked start this replaces).
+ */
+function randomStart(rng: Rng): ContestStart {
+  const center = ARENA_SIZE / 2;
+  const bearing = rng.next() * 2 * Math.PI;
+  const dx = Math.cos(bearing) * CONTEST_RADIUS;
+  const dy = Math.sin(bearing) * CONTEST_RADIUS;
+  return {
+    predator: { x: center - dx, y: center - dy, heading: rng.next() * 2 * Math.PI },
+    prey: { x: center + dx, y: center + dy, heading: rng.next() * 2 * Math.PI },
+  };
 }
 
 function viewOf(agent: Agent): AgentSnapshot {
