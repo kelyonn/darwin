@@ -2,6 +2,7 @@
   "name": "project-darwin",
   "version": "0.1.0",
   "description": "A representation-blind neuroevolution engine, hand-written in TypeScript.",
+  "license": "MIT",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -15,7 +16,7 @@
   },
   "devDependencies": {
     "typescript": "^5.4.0",
-    "vite": "^5.2.0",
-    "vitest": "^1.5.0"
+    "vite": "^8.2.0",
+    "vitest": "^4.1.10"
   }
 }
