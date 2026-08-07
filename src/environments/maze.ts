@@ -52,9 +52,10 @@ const MAX_TURN = 0.3;
  * The true path is ~38 units long at `MAX_SPEED`; this gives a real solve room
  * to complete (~1.7×) rather than being razor-tight, so a champion that has
  * genuinely learned the path can be watched finishing it, not just approaching
- * the wire.
+ * the wire. Exported so the render layer's live-replay cap can match this
+ * budget exactly rather than duplicating the number (see `createEpisode`'s doc).
  */
-const EPISODE_STEPS = 400;
+export const EPISODE_STEPS = 400;
 /** Distance (in cells) from the goal centre that counts as solved. */
 const GOAL_RADIUS = 0.2;
 
@@ -87,16 +88,21 @@ export interface LiveMazeEpisode {
  * Both search paradigms genuinely, constructively solve this maze — that is the
  * verified, honest behaviour, not "objective fails" (measured across seeds; see
  * `.docs/known-issues.md` for the full trace and the two earlier designs that
- * didn't hold up). **Novelty Search** solves immediately: it ignores the goal
- * entirely and is never tempted by the dead ends, so it reaches the goal by
- * exploration alone from generation one. **Objective GA** has to *learn* to
- * avoid two dead-end branches that reduce straight-line distance to the goal
- * faster than the true corridor does — genuinely tempting, not just nearby —
- * and typically climbs from zero to a solved route within a handful of
- * generations of real evolutionary refinement. The contrast on display is
- * *immediate exploration versus a few generations of learning*, not solve
- * versus stall — still a legitimate demonstration of the two paradigms
- * behaving differently on an identical deceptive landscape.
+ * didn't hold up). **Objective GA** has to *learn* to avoid two dead-end
+ * branches that reduce straight-line distance to the goal faster than the true
+ * corridor does — genuinely tempting, not just nearby. **Novelty Search** never
+ * looks at the goal and is never tempted by the dead ends, so it explores its
+ * way to the goal on its own timeline. Measured with `--study maze-deception`
+ * across 20 seeds (the demo's exact configs, 40-generation budget): **both
+ * strategies solved 20/20, at the same median generation (3)** — novelty is
+ * *not* reliably faster than objective at this maze's scale, contrary to an
+ * earlier, uncited claim this doc made. The legitimate point on display is
+ * architectural, not a speed contest: swapping `GenerationalGA` for
+ * `NoveltySearch` requires zero changes to the engine, and this environment
+ * lets both paradigms be watched actually learning on an identical deceptive
+ * landscape — see ADR-010 for why this maze does not reproduce the textbook
+ * "objective gets stuck forever" separation at this scale, and §1.5 of
+ * `.docs/remediation-plan.md` for what a maze that does would require.
  *
  * The same environment serves both searches. `evaluate` always writes the final
  * position as the genome's `behaviour` (used by Novelty Search) and returns the
@@ -124,6 +130,16 @@ export class MazeEnvironment implements Environment {
     return Array.from({ length: size }, () => Network.random(this.networkConfig, this.rng));
   }
 
+  /**
+   * Whether an objective score returned by {@link evaluate} corresponds to a
+   * solved maze (final position within `GOAL_RADIUS` of the goal). Exposed so
+   * headless callers (`runExperiment.ts`) can determine solved-ness without
+   * duplicating or leaking the goal-radius geometry constant.
+   */
+  static isSolved(objectiveScore: number): boolean {
+    return objectiveScore > 1 / (1 + GOAL_RADIUS);
+  }
+
   evaluate(genome: Genome): number {
     if (!(genome instanceof Network)) {
       throw new TypeError("MazeEnvironment can only evaluate a Network");
@@ -140,7 +156,17 @@ export class MazeEnvironment implements Environment {
     return 1 / (1 + this.distanceToGoal(state));
   }
 
-  /** Creates an episode a renderer advances one tick per frame. */
+  /**
+   * Creates an episode a renderer advances one tick per frame. Ends on wall
+   * contact or on reaching the goal; otherwise runs indefinitely (unlike
+   * `evaluate`, which stops at `EPISODE_STEPS`) — deliberately, so a caller
+   * that wants more runway than the scoring budget (a test checking whether a
+   * policy would *eventually* reach the goal, say) can just keep calling
+   * `step`. Callers that want a live replay bounded to what was actually
+   * scored — the render layer, so a champion that neither solves nor crashes
+   * doesn't lock the view on itself forever — enforce that cap themselves
+   * (see `MazeSimulation` in `main.ts`).
+   */
   createEpisode(network: Network): LiveMazeEpisode {
     const state = startingAgent();
     let solved = false;

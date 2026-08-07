@@ -4,6 +4,8 @@ import { GenerationalGA } from "../src/core/ga.js";
 import { NoveltySearch } from "../src/search/novelty.js";
 import { MazeEnvironment } from "../src/environments/maze.js";
 import { Network } from "../src/core/network.js";
+import { MAZE_PRESET } from "../src/app/presets.js";
+import type { Genome } from "../src/core/genome.js";
 
 /** BFS over the open cells, proving the built maze actually connects start to goal. */
 function isSolvable(env: MazeEnvironment): boolean {
@@ -155,6 +157,64 @@ describe("MazeEnvironment", () => {
       const nextGeneration = novelty.step(initial, (genome) => env.evaluate(genome));
       const solvedAny = nextGeneration.some((genome) => championSolves(env, genome as Network));
       expect(solvedAny).toBe(true);
+    }
+  });
+
+  it("the displayed novelty champion, selected by objective score not novelty score, reaches the goal in a large majority of post-warmup generations (regression, §1.3)", () => {
+    // Mirrors MazeSimulation.advance in main.ts. NoveltySearch overwrites each
+    // genome's `fitness` with its novelty score, so a champion picked by
+    // post-step fitness (as the demo used to) selects the most behaviourally
+    // *unusual* individual — an outlier by definition. Measured before the
+    // fix: that outlier reached the goal in only 46% of rendered generations
+    // (gens 6–20, 10 seeds). The fix captures each genome's objective score
+    // inside the step's own evaluate callback — which MazeEnvironment.evaluate
+    // already computes and NoveltySearch simply discards — and selects the
+    // display champion by that instead. Novelty *selection* itself never sees
+    // this map; only which population member gets rendered changes.
+    // Matches the demo's former novelty tuning (no longer in MAZE_PRESET,
+    // which is objective-only now that the on-screen maze plate is — ADR-016,
+    // `.docs/decisions.md`); kept local, same as the sibling test above.
+    const noveltyConfig = {
+      populationSize: 150,
+      eliteCount: 2,
+      tournamentSize: 5,
+      mutationRate: 0.4,
+      neighbours: 8,
+      archiveThreshold: 0.03,
+      archiveLimit: 400,
+    };
+    for (const seed of [1, 2, 3]) {
+      const rng = new Rng(seed);
+      const env = new MazeEnvironment(MAZE_PRESET.hiddenSize, rng);
+      const novelty = new NoveltySearch(noveltyConfig, rng);
+      let population = env.newPopulation(noveltyConfig.populationSize);
+
+      let solved = 0;
+      let checked = 0;
+      for (let g = 0; g < 20; g++) {
+        const evaluated = population;
+        const objectiveScores = new Map<Genome, number>();
+        population = novelty.step(evaluated, (genome) => {
+          const score = env.evaluate(genome);
+          objectiveScores.set(genome, score);
+          return score;
+        });
+
+        if (g >= 5) {
+          let champion = evaluated[0] as Genome;
+          let championScore = objectiveScores.get(champion) ?? Number.NEGATIVE_INFINITY;
+          for (const genome of evaluated) {
+            const score = objectiveScores.get(genome) ?? Number.NEGATIVE_INFINITY;
+            if (score > championScore) {
+              champion = genome;
+              championScore = score;
+            }
+          }
+          checked++;
+          if (MazeEnvironment.isSolved(championScore)) solved++;
+        }
+      }
+      expect(solved / checked).toBeGreaterThan(0.9);
     }
   });
 });
