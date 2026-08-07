@@ -72,6 +72,47 @@ several plates looked stuck:
   window shows it travels 27+ units with a consistent stance/flight rhythm
   (~46% duty factor over 1000 ticks) — a real hopping gait.
 
+## Predator–prey: fixed starting geometry masked as an arms race (fixed — see ADR-012)
+- **Symptom (from the 2026-08-06 project review):** every contest, every generation,
+  forever, started from the identical geometry — predator at `(0.25, 0.5)`, prey at
+  `(0.75, 0.5)`, both headings `0` (the prey starting turned directly *away* from the
+  predator). A controller could learn an open-loop trajectory valid only for that one
+  start, and nothing could tell whether it had. `--study coevolution-progress` (§0.1)
+  confirmed the effect directly: mean capture rate fell from ~52% (generations 1–50) to
+  ~37% (generations 151–200) across seeds, and the dominance *fraction* (see below) fell
+  non-monotonically — the arms race was, by the numbers, cycling rather than genuinely
+  progressing.
+- **Fix:** `PredatorPreyEnvironment` now draws `TRIALS = 3` starting configurations once
+  at construction (varying the bearing between agents and both headings, holding
+  separation constant) and every contest runs all three, averaging the graded payoff.
+  `compete` stays fully deterministic for a given seed. See `predatorPrey.ts` and
+  `test/coevolution.test.ts`'s "does not collapse against a held-out starting geometry"
+  regression test.
+- **Measured effect:** re-running `--study coevolution-progress` (5 seeds, 200
+  generations) after the fix: capture rate now sits flat around 52–56% across the whole
+  run (no longer declining), and the dominance fraction stabilises around 49–50% after an
+  initial settling period instead of continuing to erode. Separately, a held-out
+  generalisation check (train a champion under one environment's own trial conditions,
+  re-score it against a different environment instance with entirely different starting
+  geometries) found held-out performance tracked home performance closely — ratio
+  0.98–1.01 across three independent seed pairs, i.e. no collapse.
+- **Live demo cost:** `TRIALS = 3` triples the per-contest simulation cost. Measured
+  acceptable at the demo's population size (40) and `evolveInterval` (30 frames); if a
+  future population/opponent-sample increase makes a generation step visibly stall the
+  live view, drop `TRIALS` to 2 before reverting to a fixed start.
+
+## Predator–prey dominance readout: raw count vs. fraction (fixed — see ADR-012)
+- **Symptom:** the live readout showed `dominates N / M ancestors` where `M` (the
+  ancestor archive) grows every generation. The raw count `N` therefore rises
+  mechanically even under a purely cycling arms race — measured on one seed: the count
+  climbed from 19 to 67 across 200 generations while the *fraction* (`N / M`) fell from
+  76% to 34% over the same run. A viewer reading "36 → 67 → 78 ancestors" sees growth;
+  the data underneath was cycling.
+- **Fix:** the readout now leads with the fraction (`dominates 58% (7/12 ancestors)`),
+  and `dominanceCount`'s JSDoc (`search/coevolution.ts`) no longer calls the raw count an
+  honest progress signal on its own. See `test/coevolution.test.ts`'s synthetic-lineage
+  test locking in that the fraction can fall while the count only ever rises.
+
 ## Behavioural / tuning
 - **Predator–prey balance is hand-tuned, not adaptive.** Speeds and turn rates (the
   life–dinner asymmetry) were set empirically to keep capture rate ~25–45%. A different
@@ -115,13 +156,30 @@ several plates looked stuck:
   *failure* would need a substantially larger/more complex maze; this was
   explicitly decided against (see ADR-010) since the user's actual goal —
   watching both sides constructively, verifiably learn — was already met.
-- **The honest, shipped story:** Novelty Search solves immediately by
-  exploration alone (never tempted by either trap); Objective GA has to
-  genuinely learn to avoid two dead ends and typically does so within a
-  handful of generations. The contrast on display is *immediate exploration
-  vs. a few generations of real learning*, not solve vs. stall — still a
-  legitimate, verified demonstration of the two paradigms behaving differently
-  on an identical deceptive landscape.
+- **Correction (2026-08-06 project review, superseding the bullet below as
+  originally written):** the "immediate exploration vs. a few generations of
+  learning" framing below was itself measured and found not to hold at
+  population scale. `--study maze-deception` (§0.1 of
+  `.docs/remediation-plan.md`) across 20 seeds, the demo's exact configs,
+  40-generation budget: **objective GA solved 20/20 (median generation 3);
+  Novelty Search solved 20/20 (median generation 3)** — identical medians, no
+  reliable speed advantage for novelty. Only 3/20 seeds solved at generation 1
+  (from the shared random initial population both sides evaluate first — since
+  `main.ts` seeds both sides identically, this affects both equally, not
+  novelty alone). The demo's footnote, `MazeEnvironment`'s class doc, and the
+  README caveat were all rewritten to state this rather than the asymmetry
+  below. The architectural point — swapping `GenerationalGA` for
+  `NoveltySearch` requires zero core changes — remains true and is now the
+  entire claim; the "genuinely, constructively solve" and "not solve vs. stall"
+  claims below are unaffected and still correct.
+- **The honest, shipped story (superseded by the correction above; kept for
+  history):** ~~Novelty Search solves immediately by exploration alone (never
+  tempted by either trap); Objective GA has to genuinely learn to avoid two
+  dead ends and typically does so within a handful of generations. The
+  contrast on display is *immediate exploration vs. a few generations of real
+  learning*, not solve vs. stall~~ — still a legitimate, verified
+  demonstration of the two paradigms behaving differently on an identical
+  deceptive landscape, just not for the speed reason originally claimed.
 
 ## M10 — gait physics is intentionally minimal
 - `gait.ts` uses a single point-mass + one spring leg (stance/flight phases), not a

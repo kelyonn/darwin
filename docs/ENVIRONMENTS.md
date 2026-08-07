@@ -7,6 +7,17 @@ Conventions used throughout:
 - **Fitness** follows the PRD §6 rulebook without exception: guard every denominator (`1/(1+cost)`, never `1/cost`); progress dominates efficiency; efficiency is a tiebreaker only after the task is substantially solved.
 - **Seed discipline** — stochastic environments fix the per-generation seed so all genomes in a generation face identical conditions (or average over *k* trials). All randomness flows through the seeded PRNG.
 
+**On the live demo vs. built-but-off-demo (ADR-014, `.docs/decisions.md`):** the
+browser demo (`main.ts`) shows five of the nine environments specified below —
+Weasel, TSP, Track Runner, Maze, and Predator–prey — as a user-directed
+narrowing (nine tabs read as too many; several didn't earn their place
+*on screen* for the demo's purpose of watching the engine learn). Landscape,
+Cart-pole, Gait, and XOR are marked **(off demo)** below — this means only
+"not one of the five browser tabs," not "unbuilt" or "unspecified": all four
+keep their environment code, demo presets (`src/app/presets.ts`), tests, and
+either `--study` or `npm run bench` coverage untouched. This spec describes
+all nine as built; it is not re-tiered by demo visibility.
+
 ---
 
 ## Tier 0 — Engine proof (one-shot, no neural net)
@@ -23,7 +34,7 @@ These exist to prove the GA is representation-blind *before* any network math is
 - **Render:** current best string, generation index, fitness bar.
 - **Watch for:** nothing subtle — this is the sanity anchor. If Weasel does not converge in a few hundred generations, the GA itself is broken.
 
-### 2. Landscape optimizer
+### 2. Landscape optimizer (off demo)
 - **Genome:** Float vector (the genome *is* the coordinates). **Mode:** one-shot.
 - **I/O:** none in; the vector is the point being scored.
 - **Function:** Rastrigin or Ackley (both deceptive, many local optima). Default 2-D for visualisation, N-D for stress.
@@ -42,7 +53,7 @@ These exist to prove the GA is representation-blind *before* any network math is
 - **Render:** nodes as points, current best route as a polyline, live distance readout.
 - **Watch for:** an invalid permutation after crossover = a bug in OX/PMX, not in evolution. `genome.test.ts` must cover this before trusting any run.
 
-### 4. XOR
+### 4. XOR (off demo)
 - **Genome:** Neural network (first one). **Mode:** one-shot.
 - **I/O:** `[a, b]` (each 0/1) → one float; output ≥ 0.5 ⇒ 1.
 - **Fitness:** `4 − Σ over 4 cases (target − output)²`. Max 4 = perfect XOR.
@@ -59,7 +70,7 @@ These exist to prove the GA is representation-blind *before* any network math is
 
 First introduction of time, simulation, and the sim/render split. The genome's `feedForward` is called every tick; reward accumulates.
 
-### 5. Cart-pole
+### 5. Cart-pole (off demo)
 - **Genome:** Neural network. **Mode:** episodic (T capped, e.g. 1000 ticks).
 - **I/O:** `[cart position, cart velocity, pole angle, pole angular velocity]` → push force (left/right, or continuous).
 - **Physics:** standard inverted-pendulum equations, hand-written, fixed timestep.
@@ -75,7 +86,7 @@ First introduction of time, simulation, and the sim/render split. The genome's `
 - **Mutate / crossover:** network ops.
 - **Proves:** sensors-as-inputs; an agent perceiving its world through rays, not god-given state. Reuses cart-pole's episodic machinery.
 - **Generalization hook (replaces the cut "trading" lesson):** evaluate evolved drivers on **held-out track layouts never seen during evolution**. Does a driver that masters training tracks generalise, or has it overfit the training geometry? This teaches train/test discipline *visually* and honestly, inside an environment that is already fun to watch.
-- **Render:** track, car, raycast lines, checkpoints, distance/checkpoint readout. The held-out track is rendered side-by-side at evaluation time.
+- **Render:** track, checkpoints, distance/checkpoint readout. The live demo (round-paced — ADR-015) runs three roles from the current generation to completion each round — champion, median, and worst (ADR-018, `.docs/decisions.md`) — so the population's *spread* is visible, not just one lineage's score; fading crash markers from recent generations show where it kept failing, and a "vs. generation 1" multiplier states the improvement as a number. The held-out track is rendered side-by-side at evaluation time.
 - **Watch for:** reward hacking via wall-hugging or tiny circles if `K` is too small relative to distance — progress must dominate.
 
 ---
@@ -92,11 +103,11 @@ First introduction of time, simulation, and the sim/render split. The genome's `
   - **Objective GA:** fitness = `1/(1 + distance_to_goal)`. Gets stuck in the deceptive local optimum.
   - **Novelty Search:** fitness = behavioural novelty = mean distance (in *behaviour* space, e.g. final (x,y) position) to the *k* nearest entries in a novelty archive. Ignores the goal entirely, explores, and solves the maze.
 - **Behaviour descriptor:** agent's final position (and optionally trajectory signature).
-- **Proves:** selection pressure is swappable, and *abandoning the objective can beat pursuing it* (Lehman & Stanley 2011). The contrast is the whole pitch in one split-screen GIF.
-- **Render:** two mazes side by side, populations as dots, objective-run stuck vs novelty-run spreading and escaping; novelty archive visualised as visited regions.
+- **Proves:** selection pressure is swappable, and *abandoning the objective can beat pursuing it* (Lehman & Stanley 2011). Both paradigms are built and tested (`test/novelty.test.ts`, `--study maze-deception`); the split-screen contrast described below is what the *code* proves, not what the live demo currently shows.
+- **Render (live demo, objective side only — ADR-016, `.docs/decisions.md`):** one maze, showing three roles from the current generation — champion, median, and worst (ADR-018) — each running the maze once per generation, with fading crash markers from recent generations showing where they kept hitting the dead-end wall and a "vs. generation 1" multiplier stating the improvement as a number. A user-directed simplification: the demo previously rendered both paradigms side by side (as this spec's "Two paradigms" framing above still describes the built capability); `NoveltySearch` was dropped from the *screen* only — it still runs on the identical maze via `--study maze-deception`, with its own novelty-archive visualisation available there.
 - **Watch for:** behaviour-descriptor choice changes everything — document it. A descriptor that secretly encodes "distance to goal" smuggles the objective back in and invalidates the demo.
 
-### 8. Gait illumination + MAP-Elites
+### 8. Gait illumination + MAP-Elites (off demo)
 - **Genome:** Float vector or small network (controller for a hand-written 2-D creature). **Mode:** episodic.
 - **Creature:** a small 2-D body of hinged segments / point-masses with springs — **physics hand-written, no engine** (the physics is part of the "from scratch" story). Controller outputs joint torques over time.
 - **The shift:** do **not** return one champion. Run **MAP-Elites** — maintain an *archive* of cells indexed by **behaviour descriptors** (e.g. *stride length × duty factor*, or *average speed × body height*); each cell stores the highest-performing genome that exhibits that behaviour. New genomes are placed by their behaviour and kept only if they beat the current occupant.
