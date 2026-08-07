@@ -16,6 +16,16 @@ import type { Rng } from "../core/rng.js";
 export class VectorGenome implements Genome {
   fitness = 0;
 
+  /**
+   * Behaviour descriptor, written by divergent-search environments and read by
+   * Novelty Search and MAP-Elites. Objective selection ignores it. Left unset
+   * (absent) by objective environments; `exactOptionalPropertyTypes` forbids
+   * assigning `undefined` explicitly, so this is a true optional property
+   * (ADR-007) — the same pattern `Network` uses, extended to every genome so
+   * divergent search is not network-only (ADR-013).
+   */
+  behaviour?: readonly number[];
+
   private constructor(
     private readonly values: readonly number[],
     private readonly stdDev: number,
@@ -53,6 +63,9 @@ export class VectorGenome implements Genome {
   clone(): VectorGenome {
     const copy = new VectorGenome(this.values, this.stdDev, this.bounds, this.rng);
     copy.fitness = this.fitness;
+    if (this.behaviour !== undefined) {
+      copy.behaviour = this.behaviour;
+    }
     return copy;
   }
 

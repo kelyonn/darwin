@@ -15,6 +15,16 @@ import type { Rng } from "../core/rng.js";
 export class StringGenome implements Genome {
   fitness = 0;
 
+  /**
+   * Behaviour descriptor, written by divergent-search environments and read by
+   * Novelty Search and MAP-Elites. Objective selection ignores it. Left unset
+   * (absent) by objective environments; `exactOptionalPropertyTypes` forbids
+   * assigning `undefined` explicitly, so this is a true optional property
+   * (ADR-007) — the same pattern `Network` uses, extended to every genome so
+   * divergent search is not network-only (ADR-013).
+   */
+  behaviour?: readonly number[];
+
   private constructor(
     private readonly chars: readonly string[],
     private readonly alphabet: string,
@@ -41,6 +51,9 @@ export class StringGenome implements Genome {
   clone(): StringGenome {
     const copy = new StringGenome(this.chars, this.alphabet, this.rng);
     copy.fitness = this.fitness;
+    if (this.behaviour !== undefined) {
+      copy.behaviour = this.behaviour;
+    }
     return copy;
   }
 
