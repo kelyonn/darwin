@@ -1,132 +1,131 @@
-# Project Darwin
+<p align="center">
+  <img src="docs/readme/banner.svg" width="100%" alt="Darwin: a population's fitness rising and its spread narrowing over 120 generations.">
+</p>
 
-A representation-blind **neuroevolution engine**, hand-written in TypeScript with
-**zero runtime dependencies** — no TensorFlow, no ML libraries, no rendering or UI
-framework. One unchanged core evolves neural networks *and* strings, numeric
-vectors, and route permutations across interchangeable problem environments,
-all in the browser.
+<p align="center">
+  <b>An evolutionary engine that does not know what it is evolving.</b><br>
+  <sub>One unchanged core evolves neural networks, strings, number vectors and routes across interchangeable problems. Hand-written TypeScript, zero runtime dependencies, live in your browser.</sub>
+</p>
 
-The thesis: the evolutionary engine can be made completely blind to *what* it
-evolves and *what* problem it solves. The breadth of genome types is the proof.
+<p align="center">
+  <sub>
+    <a href="#overview">OVERVIEW</a> &nbsp;·&nbsp;
+    <a href="#quick-start">QUICK START</a> &nbsp;·&nbsp;
+    <a href="#how-it-works">HOW IT WORKS</a> &nbsp;·&nbsp;
+    <a href="#the-five-plates">THE FIVE PLATES</a> &nbsp;·&nbsp;
+    <a href="#the-result-nobody-tuned-for">THE RESULT</a> &nbsp;·&nbsp;
+    <a href="#honest-caveats">CAVEATS</a>
+  </sub>
+</p>
 
-> **Live demo:** _coming soon_ (GitHub Pages) — defaults to the predator–prey arms race.
+<br>
 
-<!-- TODO: drop a muted arms-race screenshot/GIF here once recorded (PRD §15). -->
+<table>
+  <tr>
+    <td><sub>RUNTIME DEPENDENCIES</sub><br><b>0</b></td>
+    <td><sub>GENOME TYPES</sub><br><b>4</b></td>
+    <td><sub>ENVIRONMENTS</sub><br><b>9 (5 on screen)</b></td>
+    <td><sub>SEARCH</sub><br><b>GA · co-evolution · novelty · MAP-Elites</b></td>
+    <td><sub>SAME SEED</sub><br><b>byte-identical run</b></td>
+  </tr>
+</table>
 
-## What works today
+## Overview
 
-Five environments, three genome types, and three search paradigms all run through
-**one unchanged core**, rendered as a live "specimen plate" you can switch between:
+No TensorFlow, no ML library, no rendering framework. The claim being tested is simple: an evolutionary engine can be made completely blind to *what* it evolves and *which* problem it solves.
+
+The breadth of what it handles is the proof.
+
+## Quick start
+
+```bash
+npm install
+npm run dev          # opens on the predator–prey arms race
+npm test
+npm run build        # a static bundle with zero runtime dependencies
+```
+
+## How it works
+
+Three axes that never touch each other:
+
+```mermaid
+flowchart TB
+    core(["core<br/>imports none of the three"])
+    subgraph G["what is evolved"]
+        g1["network"] --- g2["string"] --- g3["vector"] --- g4["permutation"]
+    end
+    subgraph E["the problem"]
+        e1["predator–prey"] --- e2["maze"] --- e3["track"] --- e4["TSP · weasel · landscape"]
+    end
+    subgraph S["selection pressure"]
+        s1["generational GA"] --- s2["co-evolution"] --- s3["novelty"] --- s4["MAP-Elites"]
+    end
+    G -.-> core
+    E -.-> core
+    S -.-> core
+```
+
+- **`Genome`** is what is evolved. **`Environment`** is the problem. **`SearchStrategy`** decides who survives.
+- **The core imports nothing** from `genomes/`, `environments/` or `search/`. That is enforced by construction, not convention.
+- **The same seed always reproduces a byte-identical run.**
+
+## The five plates
+
+The demo is a set of specimen plates. Every one runs through the same core.
 
 | Plate | Environment | Genome | What it proves |
-|------:|-------------|--------|----------------|
-| I | **Predator–Prey** | network ×2 | competitive co-evolution — the default landing view; a live arms race with a CIAO progress plot |
-| II | **Weasel** | string | a generic genome plugs into the core with no network at all |
-| III | **TSP** | permutation | order crossover keeps every route valid |
-| IV | **Track Runner** | network | raycast sensors + progress-led fitness shaping, watching champion/median/worst drive one attempt each so the population's spread is visible, with a live "vs. generation 1" multiplier |
-| V | **Maze** | network | champion/median/worst each run a deceptive dead-end fork once per generation, fading crash markers, a live "vs. generation 1" multiplier |
+|:-:|---|---|---|
+| I | **Predator–prey** | two networks | Competitive co-evolution, a live arms race |
+| II | **Weasel** | string | A genome with no network plugs straight in |
+| III | **Travelling salesman** | permutation | Order crossover keeps every route valid |
+| IV | **Track runner** | network | Champion, median and worst each drive one lap |
+| V | **Maze** | network | A deceptive dead end, with fading crash markers |
 
-Track Runner and Maze are **round-paced**: a generation is each of the three
-roles' full attempt (the car or agent crashes, solves, or hits its tick
-budget), not a fixed number of rendered frames — so the generation counter,
-the crash markers, and the status line on screen always describe the exact
-attempt just watched, never a stale mid-flight snapshot. Speed (0.25×–8×)
-controls how fast that attempt plays out, not how often it's summarised.
+> [!NOTE]
+> Track runner and maze are **round-paced**: one generation is each role's full attempt. So the counter and the crash markers always describe the attempt you just watched, never a stale snapshot. Speed (0.25× to 8×) changes how fast it plays, not how often it is summarised.
 
-Landscape, Cart-pole, Gait, and XOR were cut from the on-screen demo (five
-plates reads better than nine) but not from the project — their environments,
-presets, `--study` coverage, and tests are untouched; see
-[`docs/ENVIRONMENTS.md`](docs/ENVIRONMENTS.md).
+Landscape, cart-pole, gait and XOR were taken off the screen, because five plates read better than nine. They were not taken out of the project.
 
-The three decoupled axes — **representation** (`Genome`), **problem**
-(`Environment`), and **selection pressure** (`SearchStrategy` + the co-evolution
-and MAP-Elites drivers) — are the whole architecture. Every environment and every
-paradigm is *proof* those independences hold: the core imports nothing from
-`environments/`, `genomes/`, or `search/`, and the same seed reproduces a
-byte-identical run.
+## The result nobody tuned for
 
-## Cross-representation study
-
-`core/`'s representation-blindness is enforced by construction (it imports
-nothing from `genomes/`), but for most of this project's life the *proof* of
-it was one-to-one: nine environments, each hard-wired to exactly one genome
-type. Two environments now accept an **injected encoding**, so the identical,
-unmodified `GenerationalGA` drives two unrelated genetic representations of
-the same problem (`.docs/decisions.md`, ADR-013):
+Two environments accept an **injected encoding**, so the identical, unmodified GA can evolve two unrelated representations of the same problem. Twenty seeds each, with the problem held fixed:
 
 ```bash
 npm run experiment -- --study cross-representation --seeds 0-19
 ```
 
-20 seeds; each environment's problem instance (the TSP node layout; Rastrigin
-itself has none to vary) is held identical across every seed, so a difference
-in outcome is attributable to the encoding, not to which seed drew an easier
-problem:
+| Problem | Encoding | Final fitness, median | Generations to 0.9 |
+|---|---|---|---|
+| TSP, 20 nodes | Order-crossover permutation (original) | 0.184 | |
+| TSP, 20 nodes | **Random keys**, a vector sorted into a tour | **0.195** | |
+| Rastrigin 2D | Real-coded (original) | 0.99997 | 12 |
+| Rastrigin 2D | **Binary-coded**, 16 bits per dimension | 0.99998 | **9** |
 
-| Environment | Encoding | Genome | Final fitness (median, IQR) | Generations to 0.9 fitness (median, IQR) |
-|---|---|---|---|---|
-| TSP, 20 nodes | Order-crossover permutation (original) | `PermutationGenome` | 0.184 (0.179–0.189) | — |
-| TSP, 20 nodes | Random-key (Bean, 1994) | `VectorGenome`, ascending sort order = tour | **0.195** (0.191–0.197) | — |
-| Landscape, Rastrigin 2D | Real-coded (original) | `VectorGenome` | 0.99997 | 12 (8.75–13.5) |
-| Landscape, Rastrigin 2D | Binary-coded, 16 bits/dim | `StringGenome`, fixed-point decoded | 0.99998 | **9** (7.75–12.5) |
+Both alternative encodings beat the ones the engine shipped with, and neither was tuned for.
 
-Both alternative encodings are not merely functional — on these configs, both
-*outperform* the encoding the engine originally shipped with, unprompted:
-random-key TSP finds routes ≈7% shorter (fitness 0.195 vs. 0.184 — higher is
-shorter, `1 / (1 + distance)`) than order-crossover permutation on the
-identical 20-node layout, with no permutation-aware genetics at all —
-`VectorGenome`'s ordinary blend crossover and Gaussian mutation, decoded by
-sorting. Binary-coded Landscape reaches the basin around the global optimum in
-fewer generations (median 9 vs. 12) than real-coded, using `StringGenome`'s
-per-character mutation and uniform crossover — genetics built for the Weasel
-phrase, repurposed with zero changes for continuous optimisation. Neither
-result was tuned for; both were simply measured
-(`test/environments.test.ts`).
+- Random keys found routes about **7% shorter**, with no route-aware genetics at all: ordinary vector crossover, decoded by sorting.
+- Binary coding reached the global basin in fewer generations, using genetics written for the Weasel phrase and reused without a single change.
 
-`--study cross-representation` currently covers TSP and Landscape — the two
-environments with an injected encoding. Divergent search is proven
-representation-blind too: `behaviour` (the descriptor Novelty Search and
-MAP-Elites read) is now declared on all four genome classes, not just
-`Network`, and `test/mapElites.test.ts` runs MAP-Elites directly over TSP
-routes — an illuminated archive of `PermutationGenome`s, no network anywhere
-in the loop.
+## Honest caveats
 
-### Honest caveats
+> [!WARNING]
+> The maze study does **not** reproduce the textbook Lehman and Stanley (2011) result where objective search gets stuck forever. At this maze's scale both strategies solve 20 of 20 seeds at the same median generation. The labels say so rather than overclaim.
 
-- The maze's live demo shows only an objective `GenerationalGA` population
-  (user-directed simplification, ADR-016 — a single, legible maze reads
-  better than two side by side). `NoveltySearch` — swap in with zero core
-  changes, a genuine second selection paradigm — still runs on the identical
-  maze via `npm run experiment -- --study maze-deception` and is covered by
-  `test/novelty.test.ts`; it just isn't rendered in the browser. That study
-  does not reproduce the textbook Lehman & Stanley (2011) "objective gets
-  stuck forever" separation at this maze's scale: measured across 20 seeds,
-  both strategies solve 20/20 within 40 generations at the same median
-  generation (3) — novelty is not reliably faster here. The labelling
-  reflects that rather than overclaiming
-  (see [`.docs/known-issues.md`](.docs/known-issues.md), ADR-010).
-- No performance benchmarks are claimed yet — the PRD's "measure, never fabricate"
-  rule (§8) means numbers appear here only once measured.
+- The maze plate renders only the objective GA; novelty search runs on the same maze from the command line.
+- No performance benchmarks are claimed. Numbers appear only after they are measured.
 
-## Run it
+<details>
+<summary><b>Documents</b></summary>
+<br>
 
-```bash
-npm install
-npm run dev        # open the printed localhost URL — defaults to predator–prey
-npm test           # unit tests: reproducibility, elitism, matrix math, genome operators
-npm run typecheck  # strict TypeScript, no emit
-npm run build      # static bundle to dist/ (free-hostable, zero runtime deps)
-```
+| | |
+|---|---|
+| [PRD](docs/Project-Darwin-PRD.md) | Requirements and the thesis |
+| [Architecture](docs/ARCHITECTURE.md) | The three axes and their interfaces |
+| [Environments](docs/ENVIRONMENTS.md) | Every environment, specified |
+| [Research](docs/RESEARCH.md) | The lineage, and the open question |
 
-## Documentation
+</details>
 
-- [`docs/Project-Darwin-PRD.md`](docs/Project-Darwin-PRD.md) — product requirements & thesis
-- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — the three decoupled axes, interfaces, performance
-- [`docs/ENVIRONMENTS.md`](docs/ENVIRONMENTS.md) — every environment, specified
-- [`docs/RESEARCH.md`](docs/RESEARCH.md) — biological & technical lineage, the open research question
-- `docs/explainer.typ` — plain-language intro (compile with `typst compile`)
-- [`.docs/progress.md`](.docs/progress.md) — milestone status · [`CLAUDE.md`](CLAUDE.md) — contributor brief
-
-## License
-
-[MIT](LICENSE)
+<sub>MIT.</sub>
